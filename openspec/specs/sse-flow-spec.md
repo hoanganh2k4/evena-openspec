@@ -163,10 +163,10 @@ _Emitted only when the entity state is appropriate for public visibility._
 |-----------|---------|---------|
 | `event:publish` | Event transitions DRAFT → PUBLISHED | `public,organizer` |
 | `event:cancel` | Event transitions PUBLISHED → CANCELLED | `public,organizer` |
-| `event:update` | Metadata updated on a PUBLISHED event | `public,organizer` |
-| `ticket_type:create` | New TicketType on a PUBLISHED event | `public,organizer` |
-| `ticket_type:update` | TicketType metadata on a PUBLISHED event | `public,organizer` |
-| `ticket_type:deactivate` | TicketType deactivated on a PUBLISHED event | `public,organizer` |
+| `event:update` | Metadata-only update on a PUBLISHED event | `public,organizer` |
+| `ticket_type:activate` | TicketType transitions DRAFT → ACTIVE on PUBLISHED event | `public,organizer` |
+| `ticket_type:update` | Display-only field update on an ACTIVE TicketType (PUBLISHED event) | `public,organizer` |
+| `ticket_type:deactivate` | ACTIVE TicketType deactivated on a PUBLISHED event | `public,organizer` |
 | `category:create/update/delete` | Admin manages category | `public` |
 | `venue:create/update/delete` | Admin manages venue | `public` |
 
@@ -175,6 +175,13 @@ the state change from PUBLISHED to CANCELLED. It is the only public-channel
 emission related to the CANCELLED lifecycle. After the event reaches steady-state
 CANCELLED, no further public-channel broadcasts occur for that event entity.
 Refund processing emits separately to private user channels (see Tier C).
+The cascade deactivation of TicketTypes triggered by event cancel does NOT
+emit individual `ticket_type:deactivate` signals — it is an internal cascade,
+not a standalone organizer action.
+
+**Note on `ticket_type:activate`:** This replaces the former `ticket_type:create`
+Tier A entry. Creating a TicketType never emits to the public channel. Only the
+explicit DRAFT → ACTIVE transition makes a TicketType publicly visible.
 
 ### Tier B — Organizer-scoped events
 _Emitted for any entity state; never visible to customers._
@@ -183,13 +190,14 @@ _Emitted for any entity state; never visible to customers._
 |-----------|---------|---------|
 | `event:create` | New DRAFT event created | `organizer,admin` |
 | `event:update` | DRAFT event updated | `organizer,admin` |
-| `event:delete` | Any event deleted | `organizer,admin` |
-| `ticket_type:create` | New TicketType on a DRAFT event | `organizer,admin` |
-| `ticket_type:update` | TicketType on a DRAFT event | `organizer,admin` |
-| `ticket_type:delete` | Any TicketType deleted | `organizer,admin` |
+| `event:delete` | DRAFT event deleted | `organizer,admin` |
+| `ticket_type:create` | New TicketType created (any state, any event state) | `organizer,admin` |
+| `ticket_type:update` | TicketType updated while DRAFT | `organizer,admin` |
+| `ticket_type:delete` | DRAFT TicketType deleted (no bookings) | `organizer,admin` |
+| `ticket_type:deactivate` | DRAFT TicketType deactivated on DRAFT event | `organizer,admin` |
 | `organization:create` | New org created | `organizer,admin` |
 | `organization:update` | Org details updated | `organizer,admin` |
-| `organization:delete` | Org deleted | `organizer,admin` |
+| `organization:delete` | Org deleted / archived | `organizer,admin` |
 | `organization:verify` | Admin approves org (broadcast) | `organizer,admin` |
 | `organization:unverify` | Org loses verified status | `organizer,admin` |
 | `invitation:accept` | Invitation accepted | `organizer` |
@@ -198,6 +206,11 @@ _Emitted for any entity state; never visible to customers._
 **Note on `organization:verify`:** The broadcast to `organizer,admin` triggers
 list refresh for all organizers. A separate, simultaneous emit goes to
 `user:{ownerId}` (Tier C) to deliver the personal toast notification.
+
+**Note on TicketType channel routing:** Channel is determined by **TicketType
+state**, not parent event state. A DRAFT TicketType under a PUBLISHED event
+emits to `organizer,admin` only (SSE-002 revised). Only ACTIVE TicketTypes
+under PUBLISHED events emit to `public,organizer`.
 
 ### Tier C — Private user events
 _Never broadcast; sent only to the specific user's private channel._
@@ -273,8 +286,9 @@ MUST invalidate and MUST NOT invalidate.
 | `EVENT_PUBLISHED` | `'Event'` | `'Order'`, `'Ticket'` |
 | `EVENT_CANCELLED` | `'Event'` | `'Order'` (orders have their own events), `'Ticket'` |
 | `EVENT_DELETED` | `'Event'` | `'Order'`, `'Ticket'` |
-| `TICKET_TYPE_CREATED` | `'TicketType'`, `'Event'` | `'Order'`, `'Ticket'` |
-| `TICKET_TYPE_UPDATED` | `'TicketType'`, `'Event'` | `'Order'`, `'Ticket'` |
+| `TICKET_TYPE_CREATED` | `'TicketType'` | `'Order'`, `'Ticket'`, `'Event'` (public) |
+| `TICKET_TYPE_UPDATED` | `'TicketType'` | `'Order'`, `'Ticket'` |
+| `TICKET_TYPE_ACTIVATED` | `'TicketType'`, `'Event'` | `'Order'`, `'Ticket'` |
 | `TICKET_TYPE_DEACTIVATED` | `'TicketType'`, `'Event'` | `'Order'`, `'Ticket'` |
 | `ORDER_CREATED` | `'Order'` | `'Event'`, `'TicketType'`, `'Ticket'` |
 | `ORDER_CONFIRMED` | `'Order'`, `'Ticket'` | `'Event'`, `'TicketType'` |
@@ -289,11 +303,14 @@ MUST invalidate and MUST NOT invalidate.
 | `VENUE_*` | `'Venue'` | all others |
 
 **Key principle for this table:**
-The frontend cannot determine entity status (DRAFT vs PUBLISHED) from the
-SSE payload — only `eventId`/`eventName` are available. Status-gating is
-enforced at the backend channel selection level (SSE-001, SSE-002). The
-frontend applies the same invalidation regardless of status, because it
-will only receive the event if the backend chose the appropriate channel.
+The frontend cannot determine TicketType state (DRAFT vs ACTIVE) from the
+SSE payload. Status-gating is enforced at the backend channel selection level
+(SSE-002 revised). A `TICKET_TYPE_CREATED` event arriving at the frontend via
+`organizer,admin` channel means the TicketType is DRAFT — no public Event cache
+invalidation needed. A `TICKET_TYPE_ACTIVATED` event arriving via
+`public,organizer` means the TicketType became visible to customers — both
+`'TicketType'` and `'Event'` caches should be invalidated so customers see the
+new offering.
 
 ---
 
@@ -334,30 +351,52 @@ emitEvent("event:create", "public,organizer", "Event created", data);
 
 ---
 
-### SSE-002: DRAFT-event TicketTypes MUST NOT emit to the public channel
+### SSE-002: DRAFT TicketTypes MUST NOT emit to the public channel
 
 **Normative statement:**
-`notifyTicketTypeCreated()`, `notifyTicketTypeUpdated()`, and
-`notifyTicketTypeDeleted()` MUST check the parent event's publish status.
-If `!event.isPublished()`, channel MUST be `"organizer,admin"`.
-If `event.isPublished()`, channel MUST be `"public,organizer"`.
+Channel routing for TicketType SSE events is determined by **TicketType state**,
+not by parent event state.
 
-**Why:** Core Rule §1.1. TicketType changes on DRAFT events are internal
-organizer operations. Broadcasting them to public triggers customer cache
-invalidation for events they should not know exist.
+| TicketType state | Channel |
+|---|---|
+| `DRAFT` (any parent event state) | `"organizer,admin"` |
+| `ACTIVE` on PUBLISHED event | `"public,organizer"` |
+| `ACTIVE` on DRAFT event | `"organizer,admin"` |
+| `DEACTIVATED` on PUBLISHED event | `"public,organizer"` |
+| `DEACTIVATED` on DRAFT event | `"organizer,admin"` |
+
+The DRAFT → ACTIVE transition MUST emit `ticket_type:activate` to
+`"public,organizer"` (if parent event is PUBLISHED), not `ticket_type:create`.
+Creating a TicketType NEVER emits to the public channel.
+
+**Why:** Core Rule §4.2, §1.1. DRAFT TicketTypes are not visible to customers
+regardless of parent event state. Broadcasting DRAFT TicketType changes to
+`public` would trigger cache invalidation for content customers are not
+authorized to see.
 
 **Applies to:** `TicketTypeService.java`, `SSENotificationService.java`
 
 **Compliant:**
 ```java
+// On create: always organizer/admin
+emitEvent("ticket_type:create", "organizer,admin", "Ticket type created", data);
+
+// On activate: public if parent event is PUBLISHED
 String channel = event.isPublished() ? "public,organizer" : "organizer,admin";
-emitEvent("ticket_type:create", channel, "Ticket type created", data);
+emitEvent("ticket_type:activate", channel, "Ticket type activated", data);
+
+// On update: depends on TicketType state
+String channel = ticketType.isActive() && event.isPublished()
+    ? "public,organizer" : "organizer,admin";
+emitEvent("ticket_type:update", channel, "Ticket type updated", data);
 ```
 
 **Forbidden:**
 ```java
-// No status check — always broadcasts to public
-emitEvent("ticket_type:create", "public,organizer", "Ticket type created", data);
+// Routing by parent event state only — ignores TicketType state
+String channel = event.isPublished() ? "public,organizer" : "organizer,admin";
+emitEvent("ticket_type:create", channel, "Ticket type created", data);
+// ↑ Wrong: a DRAFT TicketType on a PUBLISHED event would go to public
 ```
 
 ---
@@ -753,37 +792,49 @@ The following behaviors MUST NOT exist anywhere in the system:
 1. **FORBIDDEN:** Emitting `event:create` or `event:update` to `public` when
    event status is DRAFT. (SSE-001)
 
-2. **FORBIDDEN:** Emitting `ticket_type:create`, `ticket_type:update`, or
-   `ticket_type:delete` to `public` when the parent event is DRAFT. (SSE-002)
+2. **FORBIDDEN:** Emitting any `ticket_type:*` event to `public` when the
+   TicketType state is `DRAFT`, regardless of parent event state. (SSE-002)
 
-3. **FORBIDDEN:** Passing a full entity DTO as SSE payload on any channel. (SSE-003)
+3. **FORBIDDEN:** Emitting `ticket_type:create` to `public,organizer` — create
+   always goes to `organizer,admin`. Only `ticket_type:activate` goes to
+   `public,organizer` (when parent event is PUBLISHED). (SSE-002)
 
-4. **FORBIDDEN:** Including price, currency, capacity, or inventory fields
+4. **FORBIDDEN:** Passing a full entity DTO as SSE payload on any channel. (SSE-003)
+
+5. **FORBIDDEN:** Including price, currency, capacity, or inventory fields
    in any SSE payload, except `refundAmount` in `order:refund` on `user:{userId}`. (SSE-003, §7.2)
 
-5. **FORBIDDEN:** Emitting `order:*` or `ticket:*` events to any channel
+6. **FORBIDDEN:** Emitting `order:*` or `ticket:*` events to any channel
    other than `user:{userId}`. (SSE-007)
 
-6. **FORBIDDEN:** Invalidating `'Order'` cache in response to Event or
+7. **FORBIDDEN:** Invalidating `'Order'` cache in response to Event or
    TicketType SSE events. (SSE-010)
 
-7. **FORBIDDEN:** Invalidating `'Event'` or `'TicketType'` cache in response
+8. **FORBIDDEN:** Invalidating `'Event'` or `'TicketType'` cache in response
    to `ORDER_CONFIRMED`, `ORDER_CANCELLED`, or `ORDER_EXPIRED`. (SSE-009)
 
-8. **FORBIDDEN:** Emitting SSE before the enclosing DB transaction commits. (SSE-008)
+9. **FORBIDDEN:** Emitting SSE before the enclosing DB transaction commits. (SSE-008)
 
-9. **FORBIDDEN:** Using SSE as the trigger or mechanism for executing refunds;
-   refunds MUST be backend-driven business logic. SSE notifies the outcome. (SSE-005)
+10. **FORBIDDEN:** Using SSE as the trigger or mechanism for executing refunds;
+    refunds MUST be backend-driven business logic. SSE notifies the outcome. (SSE-005)
 
-10. **FORBIDDEN:** Performing cache invalidation in any hook or component other
+11. **FORBIDDEN:** Performing cache invalidation in any hook or component other
     than SSEProvider, unless it is a targeted `refetch()` with `affectsThisEntity`
     guard and is documented. (SSE-014)
 
-11. **FORBIDDEN:** Exposing `userId`, `ownerId`, or other user identifiers in
+12. **FORBIDDEN:** Exposing `userId`, `ownerId`, or other user identifiers in
     `public` channel payloads. (SSE-015)
 
-12. **FORBIDDEN:** Emitting `event:cancel` for an event that was never
+13. **FORBIDDEN:** Emitting `event:cancel` for an event that was never
     PUBLISHED. (SSE-004)
+
+14. **FORBIDDEN:** Emitting individual `ticket_type:deactivate` signals for
+    TicketTypes that were cascade-deactivated as a result of event cancellation.
+    The cascade is an internal operation; only `event:cancel` is emitted. (SSE-004, §3.5)
+
+15. **FORBIDDEN:** Invalidating `'Event'` public cache in response to
+    `TICKET_TYPE_CREATED` — a newly created TicketType is DRAFT and not visible
+    to customers. Only `TICKET_TYPE_ACTIVATED` triggers public Event invalidation. (SSE-002, §8)
 
 ---
 
@@ -916,51 +967,73 @@ events are introduced.
 
 ## 16. [NON-NORMATIVE] Current Implementation Gap Summary
 
-_This section records the compliance status as of 2026-03-10. It is
+_This section records the compliance status as of 2026-03-12. It is
 non-normative and will be updated as gaps are closed. Do NOT use this
 section as a substitute for the normative rules above._
 
-| Rule | Status | Location |
-|------|--------|----------|
-| SSE-001 | **NON-COMPLIANT** | `EventService.java` + `SSENotificationService.notifyEventCreated()` emit to `public,organizer` for DRAFT events |
-| SSE-002 | **NON-COMPLIANT** | `TicketTypeService.java` emits to `public,organizer` without checking parent event status |
-| SSE-003 | **NON-COMPLIANT** | `notifyEventCreated()` accepts `Object payload` and receives full `EventResponse` DTO |
+| Rule | Status | Notes |
+|------|--------|-------|
+| SSE-001 | **COMPLIANT** | Fixed: `EventService` + `SSENotificationService.notifyEventCreated/Updated()` now route by event status |
+| SSE-002 | **PARTIALLY COMPLIANT** | Fixed: parent-event routing done. Pending: TicketType state routing (DRAFT TT on PUBLISHED event → `organizer,admin`) — requires `ticket_type:activate` action |
+| SSE-003 | **COMPLIANT** | Fixed: `notifyEventCreated()` now takes minimal params; no full DTOs |
 | SSE-004 | **COMPLIANT** | EventService state machine enforces PUBLISHED precondition |
 | SSE-005 | **NOT IMPLEMENTED** | No `order:refund` event, no refund flow, no SSEAction, no SSEProvider handler |
 | SSE-006 | **NOT IMPLEMENTED** | `notifyInvitationCreated()` emits to `organizer` only; no `user:{inviteeId}` emit |
 | SSE-007 | **COMPLIANT** | All `notifyOrder*` and `notifyTicket*` methods use `user:{userId}` exclusively |
 | SSE-008 | **UNKNOWN** | Must verify that all `notify*()` calls are outside `@Transactional` boundaries |
-| SSE-009 | **NON-COMPLIANT** | `SSEProvider.tsx` invalidates `EventAPI` and `TicketTypeAPI` on `ORDER_CONFIRMED` |
+| SSE-009 | **COMPLIANT** | Fixed: `SSEProvider.tsx` no longer invalidates `EventAPI`/`TicketTypeAPI` on `ORDER_CONFIRMED` |
 | SSE-010 | **COMPLIANT** | Order cache only invalidated by `ORDER_*` events in SSEProvider |
 | SSE-011 | **COMPLIANT** | TicketType deactivation does not invalidate Order cache |
-| SSE-012 | **NON-COMPLIANT** | `EventApi.ts getPublicEvents` has no `status=PUBLISHED` filter; comment says "No status filter" |
+| SSE-012 | **COMPLIANT** | Fixed: `EventApi.ts getPublicEvents` now sends `status=PUBLISHED` filter |
 | SSE-013 | **COMPLIANT** | OrderExpiryScheduler updates DB before emitting; REST API returns correct state |
 | SSE-014 | **UNKNOWN** | `useSSESync.ts` may duplicate invalidation logic; requires audit (N-2) |
 | SSE-015 | **COMPLIANT** | `ownerId` does not appear in public channel payloads |
 | SSE-016 | **UNKNOWN** | Reconnect behavior not verified in SSEProvider |
-| SSE-017 | **PARTIALLY COMPLIANT** | DRAFT/PUBLIC channel split not implemented; private channels correctly scoped |
+| SSE-017 | **PARTIALLY COMPLIANT** | DRAFT TT on PUBLISHED event routing not yet split; private channels correctly scoped |
+| SSE-NEW-01 | **NOT IMPLEMENTED** | `ticket_type:activate` action does not exist yet in actions.json or backend |
+| SSE-NEW-02 | **NOT IMPLEMENTED** | `TICKET_TYPE_ACTIVATED` not in `SSENormalizedType` enum or SSEProvider handler |
 
 ---
 
-## Appendix: Event Status → Channel Decision Table
+## Appendix: TicketType State × Event State → Channel Decision Table
+
+Channel is determined by **TicketType state** (primary) and parent event state (secondary).
 
 ```
-Entity State     | Action              | Channel (target)
-─────────────────┼─────────────────────┼─────────────────────────────
-DRAFT event      | create              | organizer,admin   ← SSE-001 fix needed
-DRAFT event      | update              | organizer,admin   ← SSE-001 fix needed
-DRAFT event      | delete              | organizer,admin   ✅
-DRAFT event      | ticketType.create   | organizer,admin   ← SSE-002 fix needed
-DRAFT event      | ticketType.update   | organizer,admin   ← SSE-002 fix needed
-DRAFT→PUBLISHED  | publish             | public,organizer  ✅
-PUBLISHED event  | update (safe only)  | public,organizer  ✅
-PUBLISHED event  | ticketType.create   | public,organizer  ✅
-PUBLISHED event  | ticketType.update   | public,organizer  ✅
-PUBLISHED event  | ticketType.deact.   | public,organizer  ✅
-PUBLISHED→CANCEL | cancel (transition) | public,organizer  ✅
-CANCELLED event  | refund (per order)  | user:{userId}     ← SSE-005 not implemented
-Order (any)      | create              | user:{userId}     ✅
-Order (any)      | confirm             | user:{userId}     ✅
-Order (any)      | cancel/expire       | user:{userId}     ✅
-Invitation       | create              | organizer + user:{inviteeId}  ← SSE-006 partial
+TicketType State | Parent Event State | Action              | Channel
+─────────────────┼────────────────────┼─────────────────────┼──────────────────────
+DRAFT            | DRAFT              | create              | organizer,admin  ✅
+DRAFT            | DRAFT              | update              | organizer,admin  ✅
+DRAFT            | DRAFT              | delete              | organizer,admin  ✅
+DRAFT            | DRAFT              | deactivate(cascade) | organizer,admin  ✅
+DRAFT            | PUBLISHED          | create              | organizer,admin  ✅ (new rule)
+DRAFT            | PUBLISHED          | update              | organizer,admin  ✅ (new rule)
+DRAFT            | PUBLISHED          | delete              | organizer,admin  ✅ (new rule)
+DRAFT            | PUBLISHED          | deactivate(cascade) | organizer,admin  ✅ (new rule — no individual emit on event cancel)
+DRAFT→ACTIVE     | DRAFT              | activate            | organizer,admin
+DRAFT→ACTIVE     | PUBLISHED          | activate            | public,organizer  ← SSE-NEW-01 not implemented
+ACTIVE           | PUBLISHED          | update (display)    | public,organizer  ✅
+ACTIVE           | PUBLISHED          | deactivate          | public,organizer  ✅
+ACTIVE           | DRAFT              | update              | organizer,admin
+ACTIVE           | DRAFT              | deactivate          | organizer,admin
+DEACTIVATED      | PUBLISHED          | (no further emits)  | —
+```
+
+## Appendix: Event State → Channel Decision Table
+
+```
+Entity State     | Action                        | Channel
+─────────────────┼───────────────────────────────┼──────────────────────────
+DRAFT event      | create                        | organizer,admin  ✅
+DRAFT event      | update                        | organizer,admin  ✅
+DRAFT event      | delete                        | organizer,admin  ✅
+DRAFT→PUBLISHED  | publish                       | public,organizer ✅
+PUBLISHED event  | update (metadata fields only) | public,organizer ✅
+PUBLISHED→CANCEL | cancel (transition)           | public,organizer ✅
+CANCELLED event  | refund (per order)            | user:{userId}    ← SSE-005 not implemented
+SOLD_OUT event   | (no separate SSE — derived)   | —
+Order (any)      | create                        | user:{userId}    ✅
+Order (any)      | confirm                       | user:{userId}    ✅
+Order (any)      | cancel/expire                 | user:{userId}    ✅
+Invitation       | create                        | organizer + user:{inviteeId}  ← SSE-006 partial
 ```
