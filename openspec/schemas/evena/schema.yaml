@@ -1,0 +1,188 @@
+version: "1.0"
+name: evena
+description: >
+  Custom OpenSpec schema for the Evena monorepo. Defines required fields,
+  allowed values, and validation rules for every change artifact.
+
+# ── CHANGE TIERS ────────────────────────────────────────────────────────────
+tiers:
+  full:
+    description: Cross-service feature, new API contract, or DB schema change
+    required_artifacts: [proposal, spec, design, tasks, review]
+    examples:
+      - "Add ticket scanning / check-in feature"
+      - "Introduce coupon / discount codes"
+      - "Add OAuth2 social login"
+  light:
+    description: Single-service feature with no contract change
+    required_artifacts: [spec, tasks, review]
+    examples:
+      - "Add sorting to organization list"
+      - "Add export-to-CSV for orders"
+  patch:
+    description: Bug fix, copy change, minor refactor
+    required_artifacts: [tasks, review]
+    examples:
+      - "Fix FK violation when deleting category with events"
+      - "Fix RTK Query list-tag invalidation gap"
+
+# ── PROPOSAL SCHEMA ──────────────────────────────────────────────────────────
+proposal:
+  required:
+    - id            # e.g. PROP-001
+    - title
+    - author
+    - date          # ISO 8601
+    - tier          # full | light | patch
+    - status        # draft | approved | rejected | deferred
+    - problem       # What user/system problem does this solve?
+    - solution      # High-level description of proposed solution
+    - affected_repos  # list: frontend | backend | sse-service
+    - risks         # list of known risks or unknowns
+  optional:
+    - motivation    # additional context / user story
+    - alternatives  # other approaches considered
+    - success_criteria
+
+  field_rules:
+    id:
+      pattern: "PROP-\\d{3}"
+    tier:
+      enum: [full, light, patch]
+    status:
+      enum: [draft, approved, rejected, deferred]
+    affected_repos:
+      type: list
+      items:
+        enum: [frontend, backend, sse-service]
+
+# ── SPEC SCHEMA ──────────────────────────────────────────────────────────────
+spec:
+  required:
+    - id            # e.g. SPEC-001, links back to PROP-001 if tier=full
+    - title
+    - author
+    - date
+    - tier
+    - status        # draft | ready | approved | superseded
+    - proposal_ref  # optional for light/patch
+    - overview
+    - user_stories  # list of "As a X, I want Y, so that Z"
+    - api_changes   # list of endpoint changes (or "none")
+    - db_changes    # list of schema changes (or "none")
+    - sse_events    # list of new/modified SSE events (or "none")
+    - frontend_changes  # list of component/page changes (or "none")
+    - out_of_scope  # explicit exclusions
+
+  optional:
+    - data_model
+    - error_cases
+    - security_notes
+    - performance_notes
+    - i18n_keys     # list of new translation keys required
+
+  field_rules:
+    id:
+      pattern: "SPEC-\\d{3}"
+    status:
+      enum: [draft, ready, approved, superseded]
+
+# ── DESIGN SCHEMA ────────────────────────────────────────────────────────────
+design:
+  required:
+    - id            # e.g. DSGN-001
+    - spec_ref      # e.g. SPEC-001
+    - title
+    - author
+    - date
+    - status        # draft | approved | superseded
+    - architecture_decisions  # list of key decisions with rationale
+    - component_map           # which components/services are touched
+    - sequence_diagrams       # text or link (mermaid preferred)
+    - db_migrations           # SQL snippets or Liquibase changesets
+    - api_contracts           # OpenAPI-style endpoint definitions
+    - sse_contract            # SSEAction enum + payload shape
+    - frontend_state_changes  # Redux slice / RTK Query changes
+
+  optional:
+    - diagrams
+    - caching_strategy
+    - rollback_plan
+
+  field_rules:
+    id:
+      pattern: "DSGN-\\d{3}"
+    status:
+      enum: [draft, approved, superseded]
+
+# ── TASKS SCHEMA ─────────────────────────────────────────────────────────────
+tasks:
+  required:
+    - id            # e.g. TASK-001
+    - spec_ref      # or design_ref for full tier
+    - title
+    - author
+    - date
+    - status        # open | in-progress | done | blocked
+    - checklist     # list of concrete implementation tasks
+
+  optional:
+    - blocked_by    # list of other task IDs
+    - notes
+
+  checklist_item:
+    required:
+      - id          # e.g. T1, T2
+      - repo        # frontend | backend | sse-service
+      - description
+      - status      # todo | done | skipped
+
+  field_rules:
+    id:
+      pattern: "TASK-\\d{3}"
+    status:
+      enum: [open, in-progress, done, blocked]
+
+# ── REVIEW SCHEMA ────────────────────────────────────────────────────────────
+review:
+  required:
+    - id            # e.g. REV-001
+    - task_ref      # e.g. TASK-001
+    - title
+    - reviewer
+    - date
+    - status        # pass | fail | needs-changes
+    - checklist     # structured pass/fail items
+    - summary       # 1–3 sentences
+
+  optional:
+    - blocking_issues   # list of issues that must be fixed before merge
+    - suggestions       # non-blocking improvements
+
+  review_checklist:
+    - id: RC-001
+      check: "All spec requirements implemented"
+    - id: RC-002
+      check: "RTK Query mutations invalidate both item + list tags"
+    - id: RC-003
+      check: "All user-visible strings use t() / i18n keys added to EN+VI"
+    - id: RC-004
+      check: "No hardcoded hex colors — BRAND constants used"
+    - id: RC-005
+      check: "Backend service throws domain exceptions (not JPA violations)"
+    - id: RC-006
+      check: "SSE personal channel used for owner-targeted events"
+    - id: RC-007
+      check: "UUID vs Long types verified in Java"
+    - id: RC-008
+      check: "Verified org edit block in both backend + frontend"
+    - id: RC-009
+      check: "No console.log in components"
+    - id: RC-010
+      check: "No new files created unless necessary"
+
+  field_rules:
+    id:
+      pattern: "REV-\\d{3}"
+    status:
+      enum: [pass, fail, needs-changes]

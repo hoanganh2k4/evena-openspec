@@ -1,0 +1,172 @@
+version: "1.0"
+project:
+  name: evena
+  description: >
+    Event Ticket Management System — full-stack monorepo consisting of three
+    services: Next.js 15 frontend (TypeScript), Spring Boot 3 backend (Java 21),
+    and a lightweight Node.js SSE fanout service.
+  repos:
+    - id: frontend
+      path: frontend
+      tech: ["nextjs", "typescript", "react", "redux-toolkit", "rtk-query", "mui", "i18next"]
+    - id: backend
+      path: backend
+      tech: ["spring-boot-3", "java-21", "jpa", "postgresql", "jwt", "sse"]
+    - id: sse-service
+      path: sse-service
+      tech: ["nodejs", "express", "redis"]
+
+schema:
+  path: schemas/evena/schema.yaml
+
+templates:
+  proposal:  schemas/evena/templates/proposal.md
+  spec:      schemas/evena/templates/spec.md
+  design:    schemas/evena/templates/design.md
+  tasks:     schemas/evena/templates/tasks.md
+  review:    schemas/evena/templates/review.md
+
+changes:
+  directory: changes
+  naming: "{YYYY-MM-DD}-{slug}"
+
+workflow:
+  # Three tiers of change scope
+  tiers:
+    full:
+      # Cross-service feature, new API contract, DB schema change
+      artifacts: [proposal, spec, design, tasks, review]
+    light:
+      # Single-service feature, no contract change
+      artifacts: [spec, tasks, review]
+    patch:
+      # Bug fix, style, copy, minor refactor
+      artifacts: [tasks, review]
+
+  gates:
+    # Each artifact must exist before proceeding to next phase
+    - proposal → spec
+    - spec → design
+    - design → tasks
+    - tasks → (implementation)
+    - implementation → review
+
+rules:
+  global:
+    - id: G-001
+      name: no-hardcoded-colors
+      description: >
+        Use MUI theme tokens or named constants (BRAND) instead of hex literals
+        (#f36bf9, #36437C, etc.) in frontend components.
+      applies_to: [frontend]
+      severity: warning
+
+    - id: G-002
+      name: i18n-all-user-visible-strings
+      description: >
+        All user-visible strings in frontend components must use the t() hook
+        from react-i18next. No raw English strings in JSX return values.
+      applies_to: [frontend]
+      severity: error
+
+    - id: G-003
+      name: sse-invalidation-both-tags
+      description: >
+        RTK Query mutations that modify a resource must invalidate BOTH the item
+        tag ({ type, id }) AND the list tag (type string) so list queries refetch.
+        Example: [{ type: 'Organizer', id }, 'Organizer']
+      applies_to: [frontend]
+      severity: error
+
+    - id: G-004
+      name: backend-service-layer-exceptions
+      description: >
+        Service methods must throw typed domain exceptions (BadRequestException,
+        NotFoundException) — never let JPA/Hibernate constraint violations
+        (DataIntegrityViolationException) surface to the client.
+      applies_to: [backend]
+      severity: error
+
+    - id: G-005
+      name: sse-personal-channel-for-owner-events
+      description: >
+        When an action targets a specific user (e.g. org verified, order
+        confirmed), the SSE notification MUST be emitted to both the broadcast
+        channel (organizer/admin) AND the personal channel (user:{ownerId}).
+      applies_to: [backend, sse-service]
+      severity: error
+
+    - id: G-006
+      name: no-console-log-in-components
+      description: >
+        No console.log calls in production frontend components or hooks.
+        Use structured logging utilities or remove entirely.
+      applies_to: [frontend]
+      severity: warning
+
+    - id: G-007
+      name: uuid-vs-long-type-safety
+      description: >
+        Java: User.id is UUID; Organization.id / Event.id / Category.id are Long.
+        Never pass a UUID where Long is expected. Verify parameter types when
+        calling SSENotificationService methods.
+      applies_to: [backend]
+      severity: error
+
+    - id: G-008
+      name: backend-verify-guard
+      description: >
+        Verified organizations cannot be edited by non-admin users. All update
+        endpoints/service methods must check organization.verified and reject
+        if true (unless caller has ADMIN role).
+      applies_to: [backend, frontend]
+      severity: error
+
+context:
+  architecture:
+    auth: >
+      JWT-based. Access token stored in Redux state.auth.accessToken.
+      Roles: USER, ORGANIZER, ADMIN.
+    sse: >
+      SSE fanout via sse-service (Node.js). Channels: public, organizer,
+      admin, user:{id}. Backend emits via SSENotificationService REST call
+      to sse-service. Frontend: SSEProvider (React context) subscribes to
+      all relevant channels, dispatches RTK Query tag invalidations, and
+      renders a global Snackbar for personal notifications.
+    data_flow: >
+      Frontend → (RTK Query) → Spring Boot REST API → PostgreSQL.
+      Spring Boot → (HTTP POST) → SSE Service → EventSource clients.
+    i18n: >
+      EN + VI supported. Keys live in
+      frontend/src/i18n/locales/{en,vi}/translation.json.
+      Always add keys to both files simultaneously.
+
+  key_files:
+    frontend:
+      - path: src/stores/services/
+        note: All RTK Query API slices (9 total)
+      - path: src/providers/SSEProvider.tsx
+        note: Central SSE handler — tag invalidation + personal toasts
+      - path: src/stores/types/sse.ts
+        note: SSEEvent, SSENotification, SSENormalizedType, SSEAction
+      - path: app/dashboard/
+        note: 22 Next.js App Router pages
+    backend:
+      - path: src/main/java/com/evena/
+        note: Service, Controller, Repository, Entity layers
+      - path: src/main/java/com/evena/service/SSENotificationService.java
+        note: All SSE emission methods
+    sse_service:
+      - path: config/channels.json
+        note: Channel permission config — allowed_resources per channel
+
+  brand_colors:
+    primary: "#f36bf9"
+    primary_dark: "#e55ae0"
+    secondary: "#36437C"
+    success_bg: "#E8F5E9"
+    success_text: "#2E7D32"
+    warning_bg: "#FFF4E6"
+    warning_text: "#E65100"
+    info_bg: "#E3F2FD"
+    info_text: "#1565C0"
