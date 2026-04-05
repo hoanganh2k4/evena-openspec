@@ -15,7 +15,7 @@ All code, features, and refactors MUST comply with these rules.
 
 ### 1.1 Customer
 Customers may:
-- View only `PUBLISHED` events
+- View `PUBLISHED` and `ONGOING` events
 - Create / update / cancel their own bookings
 - Create / pay / view their own orders
 
@@ -118,8 +118,11 @@ re-verification workflow.
 ### 3.1 Event States
 
 ```text
+DRAFT → PUBLISHED → ONGOING (auto: startAt reached)
 DRAFT → PUBLISHED → CANCELLED
-DRAFT → PUBLISHED → COMPLETED
+PUBLISHED → ONGOING → COMPLETED (auto: endAt reached)
+PUBLISHED → CANCELLED
+ONGOING → CANCELLED
 COMPLETED → PUBLISHED      (auto: capacity freed by booking cancellations)
 COMPLETED → CANCELLED
 ```
@@ -164,6 +167,15 @@ TicketType has remaining capacity.
 
 **Deletion:** PROHIBITED. Organizer must cancel the event instead.
 
+### 3.3b Ongoing Event
+
+- Auto-transition: system sets `ONGOING` when `startAt` is reached and event is `PUBLISHED`
+- Visible to customers (same as `PUBLISHED`)
+- No new bookings allowed (event has already started)
+- Cannot be edited (immutable for the same reasons as PUBLISHED)
+- May be cancelled by organizer or admin
+- Auto-transitions to `COMPLETED` when `endAt` is reached
+
 ### 3.4 Sold-Out Event
 
 - Auto-transition: system sets `COMPLETED` when no `ACTIVE` TicketType has
@@ -182,6 +194,9 @@ TicketType has remaining capacity.
 - SSE emits `event:cancel` to `public,organizer` (one-time transition signal)
 - On cancellation: all `ACTIVE` TicketTypes → `DEACTIVATED` (cascade)
 - On cancellation: all `DRAFT` TicketTypes → `DEACTIVATED` (cascade, see §4.7)
+- On cancellation: all `PENDING` Orders for this event → `CANCELLED`; sold counts
+  released back to TicketType pool; SSE emits `order:cancel` to each affected
+  user's private channel (`user:<userId>`)
 
 ### 3.6 Event deletion rules
 

@@ -17,6 +17,14 @@ openspec/
 │           ├── design.md           # Tier: full
 │           ├── tasks.md            # All tiers
 │           └── review.md           # All tiers
+├── specs/
+│   ├── rules.md            # ★ Core business rules (source of truth)
+│   ├── data-model.md       # All entities, fields, relationships, DB tables
+│   ├── enums.md            # All enum values, state machines, transitions
+│   ├── api.md              # All REST endpoints, auth, request/response shapes
+│   ├── services.md         # Service layer business logic
+│   ├── sse-flow-spec.md    # SSE channels, events, integrity rules
+│   └── sse-checklist.md    # SSE review checklist
 ├── changes/
 │   └── YYYY-MM-DD-{slug}/
 │       ├── proposal.md  (full only)
