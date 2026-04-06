@@ -1,0 +1,50 @@
+# Enums: Audit (LogAction · EntityType · ActorRole)
+
+---
+
+## LogAction
+
+Actions recorded in `activity_logs` (rules.md §7.3):
+
+### Event
+`EVENT_CREATED` · `EVENT_UPDATED` · `EVENT_DELETED` · `EVENT_APPROVED` · `EVENT_REJECTED`
+
+### TicketType
+`TICKET_TYPE_ADDED` · `TICKET_TYPE_UPDATED` · `TICKET_TYPE_DELETED` · `TICKET_TYPE_DEACTIVATED`
+
+### Order
+`ORDER_CREATED` · `ORDER_CANCELLED` · `ORDER_EXPIRED` · `ORDER_SUCCESSFULL`
+
+### Ticket
+`TICKET_ISSUED` · `TICKET_USED` · `TICKET_CANCELLED`
+
+### Payment
+`PAYMENT_INITIATED` · `PAYMENT_SUCCESS` · `PAYMENT_FAILED` · `PAYMENT_REFUNDED`
+
+### Organization
+`ORGANIZATION_ADDED` · `ORGANIZATION_UPDATED` · `ORGANIZATION_DELETED`
+`ORGANIZATION_REJECTED` · `ORGANIZATION_APPROVED` · `ORGANIZATION_VERIFIED`
+`MEMBER_UPDATED`
+
+---
+
+## EntityType
+
+| Value |
+|---|
+| `EVENT` |
+| `TICKET_TYPE` |
+| `ORDER` |
+| `TICKET` |
+| `PAYMENT` |
+| `ORGANIZATION` |
+
+---
+
+## ActorRole
+
+| Value |
+|---|
+| `ADMIN` |
+| `ORGANIZER` |
+| `CUSTOMER` |
