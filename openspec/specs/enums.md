@@ -128,14 +128,20 @@ CONFIRMED  → REFUNDED     (admin/organizer explicit refund)
 | `USED` | Checked in (check-in confirmed) |
 | `CANCELLED` | Cancelled (linked order cancelled) |
 | `EXPIRED` | Event ended; ticket no longer valid |
+| `TRANSFER_LOCKED` | Ticket is listed for FlexPass transfer; cannot be scanned |
 
 **Transitions:**
 
 ```
-ACTIVE → USED      (check-in via /tickets/scan or /tickets/{id}/check-in)
-ACTIVE → CANCELLED (order cancelled)
-ACTIVE → EXPIRED   (event completed/cancelled)
+ACTIVE → USED             (check-in via /tickets/scan or /tickets/{id}/check-in)
+ACTIVE → CANCELLED        (order cancelled)
+ACTIVE → EXPIRED          (event completed/cancelled)
+ACTIVE → TRANSFER_LOCKED  (FlexPass: seller creates listing)
+TRANSFER_LOCKED → ACTIVE  (FlexPass: listing cancelled / transfer failed / expired)
+TRANSFER_LOCKED → ACTIVE  (FlexPass: transfer COMPLETED — new owner, new QR)
 ```
+
+> A `TRANSFER_LOCKED` ticket MUST NOT be checked in. See `rules.md` §11.2.
 
 ---
 
@@ -176,10 +182,11 @@ Every scan attempt (preview `validate` AND confirmed `scan`) writes a row.
 | `EXPIRED` | Ticket is expired | Both endpoints |
 | `INVALID_QR` | QR payload not found in system | Both endpoints |
 | `WRONG_EVENT` | Ticket belongs to a different event | Both endpoints |
+| `TRANSFER_LOCKED` | Ticket is locked for FlexPass transfer | Both endpoints |
 
 > `ticket_id` is `null` for `INVALID_QR` results.
 
-**DB check constraint must include all 7 values** (migration required if enum changes).
+**DB check constraint must include all 8 values** (migration required if enum changes).
 
 ---
 
@@ -247,7 +254,38 @@ Actor classification for audit logs.
 
 ---
 
-## 13. CurrencyMinimum
+## 13. TicketTransferStatus
+
+Status of a FlexPass resale listing / transfer record.
+
+| Value | Meaning |
+|---|---|
+| `PENDING_APPROVAL` | Listing created; awaiting organizer review |
+| `APPROVED` | Organizer approved; visible in marketplace |
+| `REJECTED` | Organizer rejected; ticket unlocked back to seller |
+| `PAYMENT_PENDING` | Buyer initiated payment; escrow in progress |
+| `COMPLETED` | Payment confirmed; QR rotated; ownership transferred |
+| `FAILED` | Payment failed; ticket unlocked back to seller |
+| `CANCELLED` | Seller cancelled listing before a buyer appeared |
+| `EXPIRED` | Resale window elapsed without a buyer; ticket unlocked |
+
+**Transitions:**
+
+```
+PENDING_APPROVAL → APPROVED        (organizer approves)
+PENDING_APPROVAL → REJECTED        (organizer rejects → ticket ACTIVE)
+APPROVED → PAYMENT_PENDING         (buyer purchases)
+APPROVED → CANCELLED               (seller cancels → ticket ACTIVE)
+APPROVED → EXPIRED                 (resale window ends → ticket ACTIVE)
+PAYMENT_PENDING → COMPLETED        (payment SUCCESS → QR rotation, owner change)
+PAYMENT_PENDING → FAILED           (payment FAILED → ticket ACTIVE)
+```
+
+See `rules.md` §11 for enforcement rules.
+
+---
+
+## 14. CurrencyMinimum
 
 Minimum price for paid ticket types (price = 0 is allowed for free tickets).
 

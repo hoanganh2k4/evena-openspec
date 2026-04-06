@@ -236,6 +236,22 @@ Allowed only if:
 
 For invalid cases: write `ScanLog` with appropriate result; return `success=false`.
 
+### 7.1a QR verification — shared logic for scan and validate
+
+Both `scanTicket` and `validateTicket` run this two-step lookup before any business logic:
+
+```
+1. qrCodeService.verifyAndExtractTicketId(qrPayload)
+   → if empty → INVALID_QR (HMAC tampered or malformed)
+
+2. ticketRepository.findById(ticketId)
+     .filter(t -> t.getQrPayload().equals(qrPayload))
+   → if empty → INVALID_QR (QR was rotated by FlexPass transfer)
+```
+
+This replaces the old `findByQrPayload(String)` text-column lookup.
+The PK lookup is faster and the exact-payload filter is the FlexPass rotation guard.
+
 ### 7.2 `validateTicket(ScanRequest)` — preview only
 
 Same lookup logic as `scanTicket` but:
@@ -387,3 +403,74 @@ Errors are caught and logged but do not stop the scheduler.
 
 > Sold-out auto-transition (`COMPLETED` when all TicketTypes are SOLD_OUT) is driven
 > by `OrderService` / `TicketTypeService` at booking time, not by the scheduler.
+
+---
+
+## 13. FlexPassService
+
+### 13.1 `createListing(Long ticketId, BigDecimal listingPrice)`
+
+1. Load ticket; verify `ticket.user == currentUser`
+2. Guard: `ticket.status == ACTIVE` — throw if not
+3. Guard: `ticket.transfer_count == 0` — throw if already transferred
+4. Guard: `event.startAt > now` — throw if event already started
+5. Guard: `listingPrice <= originalPrice × 1.20` — throw if price cap exceeded
+6. `ticket.status ← TRANSFER_LOCKED`; persist ticket
+7. Create `TicketTransfer(status=PENDING_APPROVAL, expiresAt=now+14days)`
+8. Log `LISTING_CREATED`
+
+### 13.2 `cancelListing(Long listingId)`
+
+1. Verify `transfer.seller == currentUser` or caller is ADMIN
+2. Verify `transfer.status ∈ {PENDING_APPROVAL, APPROVED}` — throw if PAYMENT_PENDING or terminal
+3. `ticket.status ← ACTIVE`; persist
+4. `transfer.status ← CANCELLED`; persist
+5. Log `LISTING_CANCELLED`
+
+### 13.3 `approveListing(Long listingId)` / `rejectListing(Long listingId)`
+
+ORGANIZER or ADMIN only.
+
+- **approve:** `transfer.status ← APPROVED`; listing becomes public
+- **reject:** `transfer.status ← REJECTED`; `ticket.status ← ACTIVE` (unlocked)
+- Log accordingly
+
+### 13.4 `purchaseListing(Long listingId)`
+
+1. Verify `transfer.status == APPROVED`
+2. Verify buyer ≠ seller
+3. Set `transfer.buyer = currentUser`; `transfer.status ← PAYMENT_PENDING`
+4. Create escrow payment via `PaymentService`
+5. Return payment URL / QR for buyer
+
+### 13.5 `completeTransfer(Long transferId, UUID buyerId)` — called from payment callback
+
+**Single `@Transactional` method. All 6 steps must succeed or the entire transaction rolls back.**
+
+```
+1. ticket.qrPayload   ← UUID.randomUUID()   // QR rotation — old QR becomes INVALID_QR
+2. ticket.user_id     ← buyerId             // ownership change
+3. ticket.transfer_count ← 1               // block re-listing
+4. ticket.status      ← ACTIVE             // unlock for buyer
+5. transfer.status    ← COMPLETED
+6. transfer.completed_at ← now()
+```
+
+Post-commit (non-transactional):
+- Emit SSE `flexpass:sold` → `user:{sellerId}` + `user:{buyerId}`
+- Send confirmation emails to both parties
+- Log `TRANSFER_COMPLETED` with old_qr, new_qr, seller, buyer
+
+### 13.6 `failTransfer(Long transferId)` — called from payment callback on failure
+
+1. `transfer.status ← FAILED`
+2. `ticket.status ← ACTIVE` (unlock back to seller)
+3. Emit SSE `flexpass:failed` → `user:{sellerId}` + `user:{buyerId}`
+4. Log `TRANSFER_FAILED`
+
+### 13.7 `expireListings()` — scheduled task
+
+Runs periodically. Finds `APPROVED` listings where `expires_at <= now`:
+1. `transfer.status ← EXPIRED`
+2. `ticket.status ← ACTIVE` (unlock back to seller)
+3. Log `LISTING_EXPIRED`

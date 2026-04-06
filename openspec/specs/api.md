@@ -448,3 +448,54 @@ HTTP status codes:
 - `404` — entity not found
 - `409` — conflict (e.g., duplicate idempotency key)
 - `500` — unhandled server error
+
+---
+
+## 16. FlexPass — `/api/flexpass`
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/listings` | [Auth] | Create listing — locks ticket to TRANSFER_LOCKED |
+| DELETE | `/listings/{id}` | [Auth] | Cancel listing — unlocks ticket back to ACTIVE |
+| GET | `/listings?eventId=&page=&size=` | [Public] | Browse marketplace (APPROVED listings only) |
+| GET | `/listings/my` | [Auth] | Seller's own listings |
+| GET | `/listings/{id}` | [Public] | Listing detail |
+| PATCH | `/listings/{id}/approve` | [ORGANIZER\|ADMIN] | Approve listing |
+| PATCH | `/listings/{id}/reject` | [ORGANIZER\|ADMIN] | Reject listing — unlocks ticket |
+| POST | `/listings/{id}/purchase` | [Auth] | Buyer initiates purchase — creates escrow payment |
+
+Payment callback for FlexPass transfer is handled by the existing `/api/payment/callback`
+endpoint. Transfer orders are identified via `order.type = FLEXPASS`.
+
+### CreateListingRequest
+```json
+{
+  "ticketId": 1,
+  "listingPrice": 120000.00
+}
+```
+
+Validation (enforced by backend, `rules.md` §11.1):
+- `ticket.status == ACTIVE`
+- `ticket.transfer_count == 0`
+- `event.startAt > now`
+- `listingPrice <= originalPrice × 1.20`
+
+### TicketTransferResponse
+```json
+{
+  "id": 1,
+  "ticketId": 1,
+  "eventTitle": "...",
+  "ticketTypeName": "...",
+  "seller": { "id": "uuid", "name": "..." },
+  "buyer": null,
+  "listingPrice": 120000.00,
+  "originalPrice": 100000.00,
+  "priceIncreasePercent": 20.0,
+  "status": "APPROVED",
+  "expiresAt": "...",
+  "completedAt": null,
+  "createdAt": "..."
+}
+```

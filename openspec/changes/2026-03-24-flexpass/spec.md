@@ -195,9 +195,112 @@ File icon mới thay thế icon hiện tại (copy/paste icon) ở mục **FlexP
 | Sang tay tối đa | 1 lần (người mua mới không thể nhượng lại) |
 | Xác thực danh tính | eKYC (CCCD) bắt buộc trước khi nhận vé nhượng |
 
+Xem đầy đủ business rules tại `rules.md` §11.
+
 ---
 
-## 6. Spec References
+## 6. Transfer Security Architecture
+
+### 6.1 Attack vectors & mitigations
+
+| Attack | Mitigation |
+|---|---|
+| Screenshot QR trước khi transfer | QR rotation — `qrPayload` đổi UUID mới ngay khi transfer hoàn thành |
+| Double-spend (scan & transfer đồng thời) | `TRANSFER_LOCKED` status — scanner từ chối check-in khi ticket đang locked |
+| Re-transfer (Customer 2 bán lại) | `transfer_count` field — chặn listing nếu ≥ 1 |
+| TOCTOU race (check-in trong lúc payment đang xử lý) | Ticket bị lock từ lúc listing được tạo (PENDING_APPROVAL) |
+| Escrow failure (tiền chuyển nhưng vé không) | Single `@Transactional` — rollback toàn bộ nếu bất kỳ bước nào fail |
+
+### 6.2 Transfer state machine
+
+```
+Ticket:
+  ACTIVE → TRANSFER_LOCKED   (listing created)
+  TRANSFER_LOCKED → ACTIVE   (cancelled / failed / expired → seller gets ticket back)
+  TRANSFER_LOCKED → ACTIVE   (completed → buyer gets ticket, new QR)
+
+TicketTransfer:
+  PENDING_APPROVAL → APPROVED       (organizer)
+  PENDING_APPROVAL → REJECTED       (organizer → ticket unlocked)
+  APPROVED → PAYMENT_PENDING        (buyer pays)
+  PAYMENT_PENDING → COMPLETED       (payment SUCCESS → QR rotated atomically)
+  PAYMENT_PENDING → FAILED          (payment FAILED → ticket unlocked)
+  APPROVED → CANCELLED              (seller cancels)
+  APPROVED → EXPIRED                (resale window elapsed)
+```
+
+### 6.3 Atomic QR rotation (critical path)
+
+Khi `PAYMENT_PENDING → COMPLETED`, các bước sau PHẢI xảy ra trong **1 transaction**:
+
+```
+1. ticket.qrPayload  ← UUID mới   // QR cũ trở thành INVALID_QR ngay lập tức
+2. ticket.user_id    ← buyer.id   // đổi owner
+3. ticket.transfer_count ← 1      // chặn re-transfer
+4. ticket.status     ← ACTIVE     // mở khoá cho buyer
+5. transfer.status   ← COMPLETED
+6. transfer.completed_at ← now()
+```
+
+Nếu bất kỳ bước nào fail → rollback hoàn toàn. QR của seller vẫn valid cho đến khi transaction commit thành công.
+
+### 6.4 Database schema
+
+**Thêm cột vào `tickets`:**
+```sql
+ALTER TABLE tickets ADD COLUMN transfer_count INT NOT NULL DEFAULT 0;
+```
+
+**Bảng mới `ticket_transfers`:**
+```sql
+CREATE TABLE ticket_transfers (
+    id             BIGSERIAL PRIMARY KEY,
+    ticket_id      BIGINT        NOT NULL REFERENCES tickets(id),
+    seller_id      UUID          NOT NULL REFERENCES users(id),
+    buyer_id       UUID          REFERENCES users(id),        -- null cho đến khi có buyer
+    listing_price  DECIMAL(10,2) NOT NULL,
+    original_price DECIMAL(10,2) NOT NULL,                    -- snapshot từ order_items.unit_price
+    status         VARCHAR(30)   NOT NULL DEFAULT 'PENDING_APPROVAL',
+    expires_at     TIMESTAMP,
+    completed_at   TIMESTAMP,
+    created_at     TIMESTAMP     NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMP     NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_tt_ticket  ON ticket_transfers(ticket_id);
+CREATE INDEX idx_tt_seller  ON ticket_transfers(seller_id);
+CREATE INDEX idx_tt_status  ON ticket_transfers(status);
+```
+
+### 6.5 API endpoints
+
+| Method | Path | Auth | Mô tả |
+|---|---|---|---|
+| POST | `/api/flexpass/listings` | [Auth] | Tạo listing — lock ticket |
+| DELETE | `/api/flexpass/listings/{id}` | [Auth] | Huỷ listing — unlock ticket |
+| GET | `/api/flexpass/listings?eventId=` | [Public] | Marketplace |
+| GET | `/api/flexpass/listings/my` | [Auth] | Listing của tôi |
+| PATCH | `/api/flexpass/listings/{id}/approve` | [ORGANIZER\|ADMIN] | Duyệt |
+| PATCH | `/api/flexpass/listings/{id}/reject` | [ORGANIZER\|ADMIN] | Từ chối |
+| POST | `/api/flexpass/listings/{id}/purchase` | [Auth] | Mua — tạo escrow |
+
+Payment callback tái sử dụng `/api/payment/callback` hiện có, nhận diện
+transfer order qua `order.type = FLEXPASS`.
+
+### 6.6 New enum values
+
+**TicketStatus** — thêm:
+- `TRANSFER_LOCKED` — ticket đang trong quá trình chuyển nhượng
+
+**ScanLogResult** — thêm:
+- `TRANSFER_LOCKED` — scanner từ chối vì ticket đang bị lock
+
+**TicketTransferStatus** (enum mới):
+`PENDING_APPROVAL`, `APPROVED`, `REJECTED`, `PAYMENT_PENDING`,
+`COMPLETED`, `FAILED`, `CANCELLED`, `EXPIRED`
+
+---
+
+## 7. Spec References
 
 - `new-feature/app/pages/FlexPassAdmin.tsx` — prototype organizer view
 - `new-feature/app/pages/FlexPassCustomer.tsx` — prototype customer view

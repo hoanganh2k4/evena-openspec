@@ -163,7 +163,7 @@ _Emitted only when the entity state is appropriate for public visibility._
 |-----------|---------|---------|
 | `event:publish` | Event transitions DRAFT → PUBLISHED | `public,organizer` |
 | `event:cancel` | Event transitions PUBLISHED → CANCELLED | `public,organizer` |
-| `event:update` | Metadata-only update on a PUBLISHED event | `public,organizer` |
+| `event:update` | Metadata-only update on a PUBLISHED, ONGOING, or COMPLETED event | `public,organizer` |
 | `ticket_type:activate` | TicketType transitions DRAFT → ACTIVE on PUBLISHED event | `public,organizer` |
 | `ticket_type:update` | Display-only field update on an ACTIVE TicketType (PUBLISHED event) | `public,organizer` |
 | `ticket_type:deactivate` | ACTIVE TicketType deactivated on a PUBLISHED event | `public,organizer` |
@@ -189,7 +189,7 @@ _Emitted for any entity state; never visible to customers._
 | SSEAction | Trigger | Channel |
 |-----------|---------|---------|
 | `event:create` | New DRAFT event created | `organizer,admin` |
-| `event:update` | DRAFT event updated | `organizer,admin` |
+| `event:update` | DRAFT or CANCELLED event updated | `organizer,admin` |
 | `event:delete` | DRAFT event deleted | `organizer,admin` |
 | `ticket_type:create` | New TicketType created (any state, any event state) | `organizer,admin` |
 | `ticket_type:update` | TicketType updated while DRAFT | `organizer,admin` |
@@ -226,6 +226,18 @@ _Never broadcast; sent only to the specific user's private channel._
 | `ticket:checkin` | Ticket scanned at venue | Ticket owner |
 | `organization:verify` | Personal notification to org owner | Org owner only |
 | `invitation:create` | Invitation created — notify invitee | Invitee only |
+| `flexpass:approve` | Organizer approves a listing | Seller only (`user:{sellerId}`) |
+| `flexpass:reject` | Organizer rejects a listing | Seller only (`user:{sellerId}`) |
+| `flexpass:sold` | Transfer completes successfully | Seller + Buyer (`user:{sellerId}`, `user:{buyerId}` — two separate emits) |
+| `flexpass:expire` | Listing window expired without a buyer | Seller only (`user:{sellerId}`) |
+
+### Tier B-FlexPass — Organizer-scoped FlexPass events
+_Emitted when a listing is created or updated; never visible to customers._
+
+| SSEAction | Trigger | Channel |
+|-----------|---------|---------|
+| `flexpass:list` | Seller creates a new listing (PENDING) | `organizer,admin` |
+| `flexpass:cancel` | Seller withdraws a PENDING listing | `organizer,admin` |
 
 ---
 
@@ -248,6 +260,8 @@ personal notification is due. They MUST NOT carry full entity state.
 | Ticket events | `ticketId`, `eventId`, `eventName` | `ticketTypeName`, `orderId` |
 | Invitation events | `invitationId`, `organizationId`, `organizationName` | `inviteeEmail`, `userId`, `userName` |
 | Category/Venue | `entityId`, `entityName` | — |
+| FlexPass events (organizer-scope) | `listingId`, `ticketId`, `eventId`, `eventName` | `sellerId` (organizer/admin channels only) |
+| FlexPass events (personal) | `listingId`, `ticketId`, `eventId`, `eventName` | `refundAmount` (only in `flexpass:expire` on `user:{id}` — see §11.6 rules.md) |
 
 **Forbidden fields in any SSE payload:**
 
@@ -301,6 +315,12 @@ MUST invalidate and MUST NOT invalidate.
 | `INVITATION_*` | `'Invitation'`, `'OrganizationMember'`, `'Organizer'` | `'Event'`, `'Order'` |
 | `CATEGORY_*` | `'Category'` | all others |
 | `VENUE_*` | `'Venue'` | all others |
+| `FLEXPASS_LIST` | `'FlexPassListing'` | `'Order'`, `'Ticket'`, `'Event'`, `'TicketType'` |
+| `FLEXPASS_APPROVE` | `'FlexPassListing'` | `'Order'`, `'Ticket'`, `'Event'` |
+| `FLEXPASS_REJECT` | `'FlexPassListing'` | `'Order'`, `'Ticket'`, `'Event'` |
+| `FLEXPASS_SOLD` | `'FlexPassListing'`, `'Ticket'` | `'Order'`, `'Event'`, `'TicketType'` |
+| `FLEXPASS_EXPIRE` | `'FlexPassListing'` | `'Order'`, `'Event'`, `'TicketType'` |
+| `FLEXPASS_CANCEL` | `'FlexPassListing'` | `'Order'`, `'Ticket'`, `'Event'` |
 
 **Key principle for this table:**
 The frontend cannot determine TicketType state (DRAFT vs ACTIVE) from the
@@ -325,26 +345,33 @@ Rules MUST be testable and reviewable.
 
 **Normative statement:**
 `notifyEventCreated()` and `notifyEventUpdated()` MUST select channels based
-on event status. If `event.status == DRAFT`, channel MUST be `"organizer,admin"`.
-If `event.status == PUBLISHED`, channel MUST be `"public,organizer"`.
+on event status. The routing rule is:
+
+- `PUBLISHED`, `ONGOING`, or `COMPLETED` → `"public,organizer"`
+- `DRAFT` or `CANCELLED` → `"organizer,admin"`
 
 **Why:** Core Rule §1.1 — Customers may NOT access unpublished data.
 Emitting to `public` for a DRAFT event triggers customer RTK Query cache
-invalidation. Even if the backend endpoint filters correctly, the emit leaks
-operational information about draft events that customers have no right to know.
+invalidation. ONGOING and COMPLETED events remain publicly visible and
+customers actively viewing them must receive real-time updates. CANCELLED
+events are immutable; only the `event:cancel` transition event is public
+(see SSE-004), not subsequent updates.
 
 **Applies to:** `EventService.java`, `SSENotificationService.java`
 
 **Compliant:**
 ```java
-String channel = event.getStatus() == EventStatus.DRAFT
-    ? "organizer,admin"
-    : "public,organizer";
-emitEvent("event:create", channel, "Event created", data);
+boolean isPubliclyVisible = "PUBLISHED".equals(eventStatus)
+    || "ONGOING".equals(eventStatus)
+    || "COMPLETED".equals(eventStatus);
+String channel = isPubliclyVisible ? "public,organizer" : "organizer,admin";
+emitEvent("event:update", channel, "Event updated: " + eventName, data);
 ```
 
 **Forbidden:**
 ```java
+// Omits ONGOING/COMPLETED — attendees watching live events lose real-time updates
+String channel = "PUBLISHED".equals(eventStatus) ? "public,organizer" : "organizer,admin";
 // Status not checked — always goes to public regardless of DRAFT state
 emitEvent("event:create", "public,organizer", "Event created", data);
 ```
@@ -785,6 +812,88 @@ service layer is responsible for this second check.
 
 ---
 
+### SSE-018: FlexPass listing events MUST go to organizer,admin — never public
+
+**Normative statement:**
+`flexpass:list` and `flexpass:cancel` MUST be emitted exclusively to
+`"organizer,admin"`. These events signal that a listing is awaiting review.
+They MUST NOT be emitted to the `public` channel at any listing state.
+
+The resale market visibility for customers is determined by the REST API
+(which returns only `APPROVED` listings). The SSE layer MUST NOT expose
+listing existence to the public channel before organizer approval.
+
+**Why:** Core Rule §11.4 — a listing is in `PENDING` state when created and
+is not yet buyer-visible. Broadcasting to `public` would leak the existence
+of unreviewed resale listings to all customers. Core Rule §11.7 forbids
+emitting FlexPass listing events to the public channel.
+
+**Applies to:** `FlexPassService.java`, `SSENotificationService.java`
+
+**Compliant:**
+```java
+sseNotificationService.notifyFlexPassListing(listingId, ticketId, eventId, eventName, "organizer,admin");
+```
+
+**Forbidden:**
+```java
+// Wrong: listing not yet approved — must not go to public
+sseNotificationService.notifyFlexPassListing(listingId, ticketId, eventId, eventName, "public,organizer");
+```
+
+---
+
+### SSE-019: FlexPass personal outcome events MUST go only to user:{userId}
+
+**Normative statement:**
+`flexpass:approve`, `flexpass:reject`, `flexpass:expire`, and `flexpass:sold`
+MUST be emitted exclusively to the specific user's private channel:
+- `flexpass:approve` → `user:{sellerId}`
+- `flexpass:reject` → `user:{sellerId}`
+- `flexpass:expire` → `user:{sellerId}`
+- `flexpass:sold` → two emits: `user:{sellerId}` AND `user:{buyerId}` (separate calls)
+
+None of these events MUST go to `public`, `organizer`, or `admin`.
+
+The `flexpass:expire` event MAY include `refundAmount` (same declared-exception
+rationale as `order:refund` in §7.2 — private channel, financial observability
+required for the affected user).
+
+`flexpass:expire` MUST be followed by a separate `order:refund` emit after the
+refund record is committed. They are two distinct events (SSE-005 applies to
+the refund emit).
+
+**Why:** Core Rule §11.6 — the refund and transfer outcomes are personal
+financial events. Broadcasting them to shared channels would expose a user's
+resale activity and financial amounts to unrelated parties. Core Rule §11.7
+forbids emitting FlexPass transfer/refund events to any shared channel.
+
+**Applies to:** `SSENotificationService.java`, `FlexPassService.java`
+
+**Compliant:**
+```java
+// On approval:
+emitEvent("flexpass:approve", "user:" + sellerId, "Listing approved", data);
+
+// On sold — two separate emits:
+emitEvent("flexpass:sold", "user:" + sellerId, "Your ticket was sold", sellerData);
+emitEvent("flexpass:sold", "user:" + buyerId,  "Transfer complete",   buyerData);
+
+// On expire — with refundAmount:
+emitEvent("flexpass:expire", "user:" + sellerId, "Listing expired", dataWithRefundAmount);
+// Then, after refund record committed:
+sseNotificationService.notifyOrderRefunded(orderId, sellerId, eventId, eventName, refundAmount);
+```
+
+**Forbidden:**
+```java
+// Wrong: outcome events must not go to shared channels
+emitEvent("flexpass:approve", "organizer", ...);
+emitEvent("flexpass:sold",    "public",    ...);
+```
+
+---
+
 ## 10. Forbidden Behaviors
 
 The following behaviors MUST NOT exist anywhere in the system:
@@ -835,6 +944,23 @@ The following behaviors MUST NOT exist anywhere in the system:
 15. **FORBIDDEN:** Invalidating `'Event'` public cache in response to
     `TICKET_TYPE_CREATED` — a newly created TicketType is DRAFT and not visible
     to customers. Only `TICKET_TYPE_ACTIVATED` triggers public Event invalidation. (SSE-002, §8)
+
+16. **FORBIDDEN:** Emitting `flexpass:list` or `flexpass:cancel` to the `public`
+    channel. Pending listings are not buyer-visible. (SSE-018)
+
+17. **FORBIDDEN:** Emitting `flexpass:approve`, `flexpass:reject`, `flexpass:expire`,
+    or `flexpass:sold` to any shared channel (`public`, `organizer`, `admin`).
+    These are personal outcome events. (SSE-019)
+
+18. **FORBIDDEN:** Emitting a single `flexpass:sold` to a merged audience — seller
+    and buyer MUST receive separate emits on their own `user:{id}` channels. (SSE-019)
+
+19. **FORBIDDEN:** Including `resalePrice`, `originalPrice`, or any financial field
+    in `flexpass:list`, `flexpass:approve`, `flexpass:reject`, or `flexpass:sold`
+    payloads. Only `flexpass:expire` MAY carry `refundAmount` on `user:{id}`. (SSE-019, §7.2)
+
+20. **FORBIDDEN:** Emitting `flexpass:expire` before the expiry is committed to the
+    database, or emitting `order:refund` before the refund record is committed. (SSE-008)
 
 ---
 
@@ -992,6 +1118,8 @@ section as a substitute for the normative rules above._
 | SSE-017 | **PARTIALLY COMPLIANT** | DRAFT TT on PUBLISHED event routing not yet split; private channels correctly scoped |
 | SSE-NEW-01 | **NOT IMPLEMENTED** | `ticket_type:activate` action does not exist yet in actions.json or backend |
 | SSE-NEW-02 | **NOT IMPLEMENTED** | `TICKET_TYPE_ACTIVATED` not in `SSENormalizedType` enum or SSEProvider handler |
+| SSE-018 | **NOT IMPLEMENTED** | FlexPass backend not built; no `flexpass:list`, `flexpass:cancel` actions or routing |
+| SSE-019 | **NOT IMPLEMENTED** | No `flexpass:approve`, `flexpass:reject`, `flexpass:sold`, `flexpass:expire` actions; no SSEProvider handlers; no `FlexPassListing` RTK Query tag |
 
 ---
 

@@ -402,6 +402,103 @@ The system MUST NEVER:
 - Archive an organization with PUBLISHED events having active paid bookings
   without first cancelling those events
 
+### 8.1 FlexPass-specific forbidden actions
+
+- Allow a ticket to be listed for transfer if `transfer_count >= 1`
+- Allow a `TRANSFER_LOCKED` ticket to be checked in
+- Allow listing price to exceed original price × 1.2 (+20% cap)
+- Allow listing if the event has already started (`startAt <= now`)
+- Transfer ownership without rotating `qrPayload` to a new UUID
+- Perform QR rotation and ownership transfer in separate transactions
+  (must be atomic — single `@Transactional`)
+- Allow a completed transfer to be reversed
+
+---
+
+## 11. FLEXPASS RULES
+
+### 11.1 Transfer eligibility
+
+A ticket is eligible for FlexPass listing only when ALL conditions are true:
+
+- `ticket.status == ACTIVE`
+- `ticket.transfer_count == 0`
+- Event `startAt > now` (event not yet started)
+- Event status ∈ {`PUBLISHED`, `ONGOING` is NOT allowed — listing window must close
+  when event starts}
+- Listing price ≤ `originalPrice × 1.20`
+
+### 11.2 TicketStatus additions
+
+```text
+ACTIVE → TRANSFER_LOCKED   (seller creates listing)
+TRANSFER_LOCKED → ACTIVE   (listing cancelled by seller OR transfer failed/expired)
+TRANSFER_LOCKED → ACTIVE   (transfer completed — new owner, new QR)
+```
+
+`TRANSFER_LOCKED` tickets MUST NOT be checked in. Scanner must return
+`ScanLogResult.TRANSFER_LOCKED` and reject entry.
+
+### 11.3 TicketTransfer state machine
+
+```text
+PENDING_APPROVAL → APPROVED       (organizer approves)
+PENDING_APPROVAL → REJECTED       (organizer rejects → ticket unlocked)
+APPROVED         → PAYMENT_PENDING (buyer initiates purchase)
+PAYMENT_PENDING  → COMPLETED      (payment callback SUCCESS → QR rotated, owner changed)
+PAYMENT_PENDING  → FAILED         (payment callback FAILED → ticket unlocked to seller)
+APPROVED         → CANCELLED      (seller cancels before buyer → ticket unlocked)
+APPROVED         → EXPIRED        (resale window elapsed → ticket unlocked to seller)
+```
+
+### 11.4 QR rotation rule (CRITICAL)
+
+When a transfer reaches `COMPLETED`, the following MUST happen atomically
+in a single `@Transactional` method:
+
+1. `ticket.qrPayload` ← `UUID.randomUUID()` (new value — old QR is now `INVALID_QR`)
+2. `ticket.user_id` ← `buyer.id`
+3. `ticket.transfer_count` ← `1`
+4. `ticket.status` ← `ACTIVE`
+5. `transfer.status` ← `COMPLETED`
+6. `transfer.completed_at` ← `now()`
+
+If any step fails, the entire transaction rolls back. The seller's original QR
+remains valid until the transaction commits successfully.
+
+### 11.5 Re-transfer prevention
+
+`transfer_count` is checked at listing creation time.
+`transfer_count == 1` means the ticket has already been transferred once and
+MUST NOT be listed again. This is enforced at backend level — frontend filtering
+is insufficient.
+
+### 11.6 Listing price cap enforcement
+
+```
+MAX_PRICE = originalPrice × 1.20
+```
+
+`originalPrice` is taken from `order_items.unit_price` (snapshot — immutable).
+Backend MUST reject any listing where `listingPrice > MAX_PRICE`.
+
+### 11.7 Escrow and payment
+
+- Buyer payment is held in escrow until transfer is confirmed
+- If payment is confirmed but ticket assignment fails → payment must be
+  refunded explicitly (same refund flow as §6)
+- Partial failures are NOT silent — error is thrown and logged
+
+### 11.8 Audit requirements
+
+The following FlexPass actions MUST be logged in `activity_logs`:
+
+- Listing created
+- Listing approved / rejected by organizer
+- Transfer completed (old QR payload, new QR payload, seller, buyer)
+- Transfer failed / expired (reason)
+- Listing cancelled by seller
+
 ---
 
 ## 9. ERROR HANDLING

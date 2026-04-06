@@ -355,13 +355,22 @@ event data for display (see `rules.md` §5).
 |---|---|---|---|
 | id | Long | PK, auto-increment | |
 | order_item_id | Long | FK → order_items.id, NOT NULL | |
-| user_id | UUID | FK → users.id, NOT NULL | |
-| qr_payload | String | UNIQUE, NOT NULL | QR code data |
+| user_id | UUID | FK → users.id, NOT NULL | Current owner (changes on transfer) |
+| qr_payload | String | UNIQUE, NOT NULL, length=255 | HMAC-signed: `{ticketId}:{userId}:{nonce}:{hmac}` |
 | status | TicketStatus | NOT NULL, default=ACTIVE | see Enums §5 |
+| transfer_count | Integer | NOT NULL, default=0 | Max 1; enforced at listing creation |
 | issued_at | LocalDateTime | NOT NULL | |
 | used_at | LocalDateTime | nullable | Set on check-in |
 | created_at | LocalDateTime | auto | |
 | updated_at | LocalDateTime | auto | |
+
+> **QR payload format:** `{ticketId}:{userId}:{nonce}:{hmac}` where
+> `hmac = HMAC-SHA256("{ticketId}:{userId}:{nonce}", QR_SECRET)` (hex-encoded, 64 chars).
+> Scanner verifies HMAC then does PK lookup + exact payload match.
+> Max length ≈ 145 chars (fits in VARCHAR(255)).
+>
+> **FlexPass:** `user_id` and `qr_payload` are mutable on transfer (see `rules.md` §11.4).
+> `transfer_count` is immutable after reaching 1.
 
 ---
 
@@ -371,7 +380,7 @@ event data for display (see `rules.md` §5).
 
 **Indexes:** `event_id`, `scanned_by`, `ticket_id`
 
-**Check constraint:** `result IN ('SUCCESS','VALID','ALREADY_USED','CANCELLED','EXPIRED','INVALID_QR','WRONG_EVENT')`
+**Check constraint:** `result IN ('SUCCESS','VALID','ALREADY_USED','CANCELLED','EXPIRED','INVALID_QR','WRONG_EVENT','TRANSFER_LOCKED')`
 
 | Field | Type | Constraints | Notes |
 |---|---|---|---|
@@ -384,6 +393,38 @@ event data for display (see `rules.md` §5).
 | qr_payload | String | NOT NULL, length=512 | |
 
 > Every scan (validate preview AND confirm check-in) creates a row.
+
+---
+
+### 3.5 TicketTransfer
+
+**Table:** `ticket_transfers`
+
+Records a FlexPass resale listing and its full lifecycle.
+
+**Indexes:** `ticket_id`, `seller_id`, `status`
+
+| Field | Type | Constraints | Notes |
+|---|---|---|---|
+| id | Long | PK, auto-increment | |
+| ticket_id | Long | FK → tickets.id, NOT NULL | |
+| seller_id | UUID | FK → users.id, NOT NULL | Original owner |
+| buyer_id | UUID | FK → users.id, nullable | Set when buyer purchases |
+| listing_price | BigDecimal | precision=10, scale=2, NOT NULL | ≤ original × 1.20 |
+| original_price | BigDecimal | precision=10, scale=2, NOT NULL | Snapshot from order_items.unit_price |
+| status | TicketTransferStatus | NOT NULL, default=PENDING_APPROVAL | see Enums §13 |
+| expires_at | LocalDateTime | nullable | Resale window end |
+| completed_at | LocalDateTime | nullable | Set on COMPLETED |
+| created_at | LocalDateTime | auto | |
+| updated_at | LocalDateTime | auto | |
+
+**Relationships:**
+- ManyToOne → `Ticket`
+- ManyToOne → `User` (seller)
+- ManyToOne → `User` (buyer, nullable)
+
+**Business constraint:** Only one `TicketTransfer` may be in state
+`PENDING_APPROVAL`, `APPROVED`, or `PAYMENT_PENDING` per ticket at a time.
 
 ---
 
