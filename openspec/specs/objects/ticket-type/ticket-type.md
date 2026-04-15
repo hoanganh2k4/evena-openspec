@@ -42,7 +42,8 @@
 
 | Field | Rule |
 |---|---|
-| price, currency, benefits, refundPolicy | Locked once ACTIVE |
+| price, currency | Locked once ACTIVE (DB columns — see schema above) |
+| benefits, refundPolicy | Locked once ACTIVE (**not DB columns** — stored in description/metadata; referenced by rules as logical concepts) |
 | total (decrease below `sold`) | Forbidden **at all times** |
 | total (increase) | Permitted after ACTIVE — must be logged |
 | name, description, visible | Never locked |

@@ -178,6 +178,12 @@ TicketType has remaining capacity.
 
 ### 3.4 Sold-Out Event
 
+> **Note:** `COMPLETED` is a shared state used for two distinct triggers:
+> (a) all `ACTIVE` TicketTypes are sold out, and (b) the event's `endAt` is
+> reached. Only the sold-out trigger allows auto-transition back to `PUBLISHED`.
+> The time-ended trigger does not.
+
+**Trigger (a) — Sold-out:**
 - Auto-transition: system sets `COMPLETED` when no `ACTIVE` TicketType has
   remaining capacity (`sold >= capacity` across all ACTIVE types)
 - No new bookings accepted
@@ -185,13 +191,19 @@ TicketType has remaining capacity.
 - Auto-transition back to `PUBLISHED` when capacity is freed (booking cancellation)
 - Organizer may cancel a `COMPLETED` event
 
+**Trigger (b) — Time-ended:**
+- Auto-transition: system sets `COMPLETED` when `endAt` is reached and event
+  is `ONGOING`
+- Event is permanently completed — does NOT transition back to `PUBLISHED`
+- No new bookings or cancellations accepted
+
 ### 3.5 Cancelled Event
 
 - No new bookings allowed
 - All paid bookings MUST be refunded (explicit backend action, not silent)
 - Event becomes fully immutable
 - CANNOT be deleted; data retained for audit and refund resolution
-- SSE emits `event:cancel` to `public,organizer` (one-time transition signal)
+- SSE emits `event:cancel` to `public` and `organizer` channels (one-time transition signal)
 - On cancellation: all `ACTIVE` TicketTypes → `DEACTIVATED` (cascade)
 - On cancellation: all `DRAFT` TicketTypes → `DEACTIVATED` (cascade, see §4.7)
 - On cancellation: all `PENDING` Orders for this event → `CANCELLED`; sold counts
@@ -415,20 +427,23 @@ The system MUST NEVER:
 
 ---
 
-## 11. FLEXPASS RULES
+## 9. FLEXPASS RULES
 
-### 11.1 Transfer eligibility
+### 9.1 Transfer eligibility
 
 A ticket is eligible for FlexPass listing only when ALL conditions are true:
 
 - `ticket.status == ACTIVE`
 - `ticket.transfer_count == 0`
-- Event `startAt > now` (event not yet started)
-- Event status ∈ {`PUBLISHED`, `ONGOING` is NOT allowed — listing window must close
-  when event starts}
-- Listing price ≤ `originalPrice × 1.20`
+- `event.startAt > now` (event has not yet started)
+- `event.status == PUBLISHED` (`ONGOING`, `COMPLETED`, `CANCELLED` are all rejected)
+- `originalPrice × 0.50 ≤ submittedPrice ≤ originalPrice × 1.20`
 
-### 11.2 TicketStatus additions
+> The lower cap (0.50) prevents artificial price dumping.
+> The upper cap (1.20) prevents scalping.
+> `originalPrice` is taken from `order_items.unit_price` (immutable snapshot).
+
+### 9.2 TicketStatus additions
 
 ```text
 ACTIVE → TRANSFER_LOCKED   (seller creates listing)
@@ -439,7 +454,7 @@ TRANSFER_LOCKED → ACTIVE   (transfer completed — new owner, new QR)
 `TRANSFER_LOCKED` tickets MUST NOT be checked in. Scanner must return
 `ScanLogResult.TRANSFER_LOCKED` and reject entry.
 
-### 11.3 TicketTransfer state machine
+### 9.3 TicketTransfer state machine
 
 ```text
 PENDING_APPROVAL → APPROVED       (organizer approves)
@@ -451,7 +466,7 @@ APPROVED         → CANCELLED      (seller cancels before buyer → ticket unlo
 APPROVED         → EXPIRED        (resale window elapsed → ticket unlocked to seller)
 ```
 
-### 11.4 QR rotation rule (CRITICAL)
+### 9.4 QR rotation rule (CRITICAL)
 
 When a transfer reaches `COMPLETED`, the following MUST happen atomically
 in a single `@Transactional` method:
@@ -466,14 +481,14 @@ in a single `@Transactional` method:
 If any step fails, the entire transaction rolls back. The seller's original QR
 remains valid until the transaction commits successfully.
 
-### 11.5 Re-transfer prevention
+### 9.5 Re-transfer prevention
 
 `transfer_count` is checked at listing creation time.
 `transfer_count == 1` means the ticket has already been transferred once and
 MUST NOT be listed again. This is enforced at backend level — frontend filtering
 is insufficient.
 
-### 11.6 Listing price cap enforcement
+### 9.6 Listing price cap enforcement
 
 ```
 MAX_PRICE = originalPrice × 1.20
@@ -482,14 +497,14 @@ MAX_PRICE = originalPrice × 1.20
 `originalPrice` is taken from `order_items.unit_price` (snapshot — immutable).
 Backend MUST reject any listing where `listingPrice > MAX_PRICE`.
 
-### 11.7 Escrow and payment
+### 9.7 Escrow and payment
 
 - Buyer payment is held in escrow until transfer is confirmed
 - If payment is confirmed but ticket assignment fails → payment must be
   refunded explicitly (same refund flow as §6)
 - Partial failures are NOT silent — error is thrown and logged
 
-### 11.8 Audit requirements
+### 9.8 Audit requirements
 
 The following FlexPass actions MUST be logged in `activity_logs`:
 
@@ -498,10 +513,89 @@ The following FlexPass actions MUST be logged in `activity_logs`:
 - Transfer completed (old QR payload, new QR payload, seller, buyer)
 - Transfer failed / expired (reason)
 - Listing cancelled by seller
+- Sale window created / cancelled / opened / closed
+- Price locked per listing (submittedPrice → finalPrice recorded)
 
 ---
 
-## 9. ERROR HANDLING
+### 9.9 Price discovery
+
+#### Overview
+
+FlexPass uses a **price discovery mechanism** to determine a single fair `finalPrice` per ticket type for each sale window. Sellers submit their desired price; the system aggregates; organizer reviews and triggers the window.
+
+#### Phase 1 — Submission
+
+- Sellers create listings with `submittedPrice` (their desired amount, within §9.1 caps)
+- Listings are approved individually by organizer (`APPROVED` state)
+- `APPROVED` listings are **visible** in the marketplace but **not purchasable** until a sale window opens
+
+#### Phase 2 — Price analysis (organizer reviews)
+
+Before creating a sale window, organizer calls `GET /events/{eventId}/price-analysis`.
+
+The system calculates 3 metrics for each ticket type from all `APPROVED` listings:
+
+| Metric | Formula |
+|---|---|
+| `MEDIAN` | Middle value when all `submittedPrice` values are sorted ascending |
+| `MEAN` | Arithmetic average of all `submittedPrice` values |
+| `TRIMMED_MEAN` | See trimming rules below |
+
+The system returns all 3 values plus a `recommended` field (always `TRIMMED_MEAN`).
+
+> **Why TRIMMED_MEAN is recommended:** It removes extreme outliers (both very cheap and very expensive) while preserving the central tendency of the distribution — more informative than median, more robust than mean.
+
+##### TRIMMED_MEAN — trimming rules
+
+The number of listings removed from each end depends on `listingCount`:
+
+| listingCount | Trim each end | Effective formula |
+|---|---|---|
+| < 3 | 0 | Same as MEAN (no trim possible) |
+| 3 – 9 | 1 listing | Remove the 1 lowest + 1 highest, average the rest |
+| ≥ 10 | 10% (floor) | Remove floor(listingCount × 0.10) from each end, average the rest |
+
+Examples:
+- 2 listings `[80k, 120k]` → no trim → mean = `100k`
+- 5 listings `[70k, 80k, 90k, 100k, 150k]` → remove 1 each end → mean of `[80k, 90k, 100k]` = `90k`
+- 10 listings → remove 1 each end (floor(10 × 0.10) = 1) → mean of remaining 8
+
+> Backend MUST use `floor()` for trim count, not `round()`, to avoid removing more than intended on small datasets.
+
+#### Phase 3 — Organizer creates sale window
+
+Organizer selects `priceMethod` and sets `saleStart` / `saleEnd`.
+At creation time:
+- System computes `selectedPrice` per ticket type using the chosen method
+- Prices are **frozen** at this point — adding new listings after window creation does NOT affect prices
+- Organizer sees all `selectedPrice` values in the response for final review
+
+#### Phase 4 — Window opens (`saleStart` reached)
+
+All `APPROVED` listings under this event atomically transition to `PRICE_LOCKED`:
+- `transfer.finalPrice ← selectedPrice` for their ticket type
+- `transfer.saleWindowId ← saleWindow.id`
+- `transfer.status ← PRICE_LOCKED`
+
+Rules once PRICE_LOCKED:
+- Seller CANNOT cancel
+- `finalPrice` is immutable
+- Buyers pay `finalPrice` (not `submittedPrice`)
+- Marketplace displays `finalPrice` as the price
+
+#### Phase 5 — Window closes (`saleEnd` reached)
+
+- All `PRICE_LOCKED` listings that were not sold → `EXPIRED`; `ticket.status ← ACTIVE`
+- Organizer may create a new window for remaining listings
+
+#### Forced-price acceptance rule
+
+By creating a listing and having it approved, the seller **implicitly agrees** to sell at whatever `finalPrice` the system calculates. There is no opt-out once the window opens. This MUST be communicated to sellers at listing creation time (UI disclaimer + SSE notification when price is locked).
+
+---
+
+## 10. ERROR HANDLING
 
 - Forbidden actions must throw clear validation errors
 - Silent failures or auto-fixes are not allowed
@@ -510,7 +604,7 @@ The following FlexPass actions MUST be logged in `activity_logs`:
 
 ---
 
-## 10. FINAL PRINCIPLE
+## 11. FINAL PRINCIPLE
 
 If money has been paid or a user has booked,
 the system must protect that data above all else.

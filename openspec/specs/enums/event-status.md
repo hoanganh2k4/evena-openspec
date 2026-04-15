@@ -16,7 +16,7 @@ PUBLISHED → ONGOING     (auto: EventScheduler when startAt reached)
 PUBLISHED → CANCELLED   (organizer/admin)
 ONGOING   → COMPLETED   (auto: EventScheduler when endAt reached)
 ONGOING   → CANCELLED   (organizer/admin)
-COMPLETED → PUBLISHED   (auto: when booking cancellation frees capacity)
+COMPLETED → PUBLISHED   (auto: when booking cancellation frees capacity — **only applies when COMPLETED was reached via sold-out trigger, not via endAt timeout**)
 COMPLETED → CANCELLED   (organizer/admin)
 ```
 

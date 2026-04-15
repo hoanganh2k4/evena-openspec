@@ -14,7 +14,7 @@
 ```
 PENDING    → PROCESSING   (payment initiated)
 PROCESSING → CONFIRMED    (payment callback: SUCCESS)
-PROCESSING → CANCELLED    (payment callback: FAILED)
+PROCESSING → PENDING      (payment callback: FAILED — reverted to allow retry)
 PENDING    → CANCELLED    (user cancel OR event cancel cascade)
 PENDING    → EXPIRED      (TTL elapsed)
 CONFIRMED  → REFUNDED     (admin/organizer explicit refund)

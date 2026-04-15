@@ -25,7 +25,7 @@
 - Rows are **append-only** — never updated or deleted
 - Logging is `@Async` — failures must not roll back the triggering transaction
 - `old_value` and `new_value` store full JSON snapshots of the entity before/after change
-- Required fields per entry: `actor_id`, `action`, `entity_type`, `entity_id`
+- All schema columns are nullable at DB level (to tolerate async failures), but **semantically required for a meaningful audit entry:** `actor_id`, `action`, `entity_type`, `entity_id` — these MUST be populated by every caller
 
 ## Audit-required actions (rules.md §7.3)
 

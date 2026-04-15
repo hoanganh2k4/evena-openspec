@@ -6,7 +6,7 @@
 |---|---|---|---|
 | POST | `/` | [ORGANIZER\|ADMIN] | Create (status=DRAFT) |
 | GET | `/{ticketTypeId}` | [Public] | Get by ID |
-| GET | `/` | [Public] | All ticket types for event |
+| GET | `/` | [Public] | All ticket types for event — **ACTIVE and SOLD_OUT only** for public; all states for ORGANIZER/ADMIN |
 | GET | `/public` | [Public] | Visible types only (visible=true) |
 | GET | `/paged?page=&size=` | [ORGANIZER\|ADMIN] | Paginated |
 | GET | `/available` | [Public] | Types with stock > 0 |
