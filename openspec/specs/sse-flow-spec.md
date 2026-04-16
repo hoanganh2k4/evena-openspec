@@ -1,7 +1,7 @@
 # SSE Flow & Realtime Integrity Spec
 
-**Version:** 2.0
-**Date:** 2026-03-10
+**Version:** 2.1
+**Date:** 2026-04-16
 **Status:** approved
 **Authors:** team
 **Applies to:** frontend · backend · sse-service
@@ -78,11 +78,12 @@ This spec covers:
 │  └── Renders global Snackbar for personal notifications           │
 │                                                                   │
 │  RTK Query Cache                                                  │
-│  ├── EventAPI        ['Event', {type:'Event', id}]               │
-│  ├── OrderAPI        ['Order', 'Ticket']                         │
-│  ├── TicketTypeAPI   ['TicketType', {type:'TicketType', id}]     │
-│  ├── OrganizerAPI    ['Organizer', {type:'Organizer', id}]       │
-│  └── OrganizationMemberAPI  ['Invitation', 'OrganizationMember'] │
+│  ├── EventAPI           ['Event', {type:'Event', id}]            │
+│  ├── OrderAPI           ['Order', 'Ticket']                      │
+│  ├── TicketTypeAPI      ['TicketType', {type:'TicketType', id}]  │
+│  ├── OrganizerAPI       ['Organizer', {type:'Organizer', id}]    │
+│  ├── OrganizationMemberAPI  ['Invitation', 'OrganizationMember'] │
+│  └── RefundRequestAPI   ['RefundRequest']                        │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -124,7 +125,26 @@ deactivated TicketType.
 | `public` | All authenticated users | PUBLISHED event lifecycle; category/venue admin changes; PUBLISHED ticket type availability |
 | `organizer` | Users with ORGANIZER role | Org CRUD; event lifecycle including DRAFT; invitation changes; ticket type changes |
 | `admin` | Users with ADMIN role | All organizer content + org approval actions |
-| `user:{id}` | Only that specific user | Their own orders, their own tickets, personal org verification, personal invitations |
+| `user:{id}` | Only that specific user | Their own orders, their own tickets, personal org verification, personal invitations, refund request updates; **also receives order/refund fan-out if they are the organizer of that event** (see §5.1) |
+
+### §5.1 Order/Refund fan-out to organizer via private channel
+
+Order and refund events are emitted to **two private `user:{id}` channels** — the customer's and the organizer's — rather than to the shared `organizer` channel. This is the authoritative fan-out pattern for order notifications.
+
+| Recipient | Channel | Payload difference |
+|-----------|---------|-------------------|
+| Customer | `user:{customerId}` | Full payload; MAY include `refundAmount` (see §7.2) |
+| Organizer | `user:{organizerId}` | Same payload + `organizerNotification: true`; MUST NOT include `refundAmount` |
+
+**Why private channel instead of `organizer`:** The `organizer` channel is a shared broadcast to all organizers. Sending order events there would expose a specific customer's order ID, ticket count, and event name to all other organizers in the system. Using `user:{organizerId}` keeps the signal targeted to the specific event owner.
+
+**Why `organizerNotification: true`:** Both customer and organizer receive the same normalized type (e.g., `ORDER_CONFIRMED`). Without the flag, SSEProvider would show the customer-facing toast ("Your tickets are confirmed") on the organizer's screen. The flag suppresses personal toasts for the organizer and allows organizer-specific UI components (order monitoring tables) to handle the signal instead.
+
+**`organizerUserId` is nullable.** When `null` (orders created before the organizer snapshot field existed), the organizer fan-out is silently skipped. Only the customer emit fires.
+
+**Events that use this fan-out pattern:**
+- `order:create`, `order:confirm`, `order:cancel`, `order:expire`, `order:refund` — all fan-out to `user:{organizerId}` without `refundAmount`
+- `refund:completed` — fan-out to `user:{organizerId}` with `organizerNotification: true`
 
 ### Subscription by role (enforced in SSEProvider.tsx)
 
@@ -217,15 +237,19 @@ _Never broadcast; sent only to the specific user's private channel._
 
 | SSEAction | Trigger | Recipient |
 |-----------|---------|-----------|
-| `order:create` | Order created (PENDING) | Order owner |
-| `order:confirm` | Payment successful | Order owner |
-| `order:cancel` | Order cancelled | Order owner |
-| `order:expire` | Order expired (15 min timeout) | Order owner |
-| `order:refund` | Refund initiated for a paid order | Order owner |
+| `order:create` | Order created (PENDING) | Order owner (`user:{customerId}`) + event organizer (`user:{organizerId}`) — see §5.1 |
+| `order:confirm` | Payment successful | Order owner + event organizer — see §5.1 |
+| `order:cancel` | Order cancelled | Order owner + event organizer — see §5.1 |
+| `order:expire` | Order expired (15 min timeout) | Order owner + event organizer — see §5.1 |
+| `order:refund` | Refund initiated for a paid order | Order owner (with `refundAmount`) + event organizer (without `refundAmount`) — see §5.1, §7.2 |
 | `ticket:issue` | Ticket generated after payment | Ticket owner |
 | `ticket:checkin` | Ticket scanned at venue | Ticket owner |
 | `organization:verify` | Personal notification to org owner | Org owner only |
 | `invitation:create` | Invitation created — notify invitee | Invitee only |
+| `refund:created` | Customer submits a refund request | Organizer of that event (`user:{organizerId}`) |
+| `refund:reject` | Organizer rejects a refund request | Customer who submitted (`user:{customerId}`) |
+| `refund:completed` | Refund processing completes (REFUNDED) | Customer (`user:{customerId}`) + Organizer (`user:{organizerId}`) — two separate emits |
+| `refund:failed` | Refund processing failed (REFUND_FAILED) | Organizer only (`user:{organizerId}`) |
 | `flexpass:approve` | Organizer approves a listing | Seller only (`user:{sellerId}`) |
 | `flexpass:reject` | Organizer rejects a listing | Seller only (`user:{sellerId}`) |
 | `flexpass:sold` | Transfer completes successfully | Seller + Buyer (`user:{sellerId}`, `user:{buyerId}` — two separate emits) |
@@ -256,12 +280,32 @@ personal notification is due. They MUST NOT carry full entity state.
 | Organization events | `organizationId`, `organizationName` | `ownerId` (only in organizer/user channels) |
 | TicketType events | `ticketTypeId`, `eventId`, `ticketTypeName` | — |
 | Order events | `orderId`, `eventId`, `eventName` | `ticketCount` (only for `order:confirm`) |
-| Refund events | `orderId`, `eventId`, `eventName` | `refundAmount` (see §7.2) |
+| Refund order events | `orderId`, `eventId`, `eventName` | `refundAmount` (see §7.2) |
+| Refund request events | `refundRequestId`, `orderId`, `eventId`, `eventName` | `requesterName` (`refund:created`); `reviewNote` (`refund:reject`); `organizerNotification` (`refund:completed`) |
 | Ticket events | `ticketId`, `eventId`, `eventName` | `ticketTypeName`, `orderId` |
 | Invitation events | `invitationId`, `organizationId`, `organizationName` | `inviteeEmail`, `userId`, `userName` |
 | Category/Venue | `entityId`, `entityName` | — |
 | FlexPass events (organizer-scope) | `listingId`, `ticketId`, `eventId`, `eventName` | `sellerId` (organizer/admin channels only) |
 | FlexPass events (personal) | `listingId`, `ticketId`, `eventId`, `eventName` | `refundAmount` (only in `flexpass:expire` on `user:{id}` — see §11.6 rules.md) |
+
+#### §7.3 organizerNotification flag
+
+When an event is fan-outed to both the customer's and the organizer's `user:{id}` channel (see §5.1), the organizer emit MUST include `organizerNotification: true` in the payload. Both recipients receive the same normalized type (e.g., `ORDER_CONFIRMED`, `REFUND_REQUEST_COMPLETED`) in SSEProvider.
+
+SSEProvider MUST suppress customer-facing toast notifications when `data.organizerNotification === true`. Organizer-specific UI components (order tables, refund request tables) are responsible for reacting to these events instead.
+
+**Events that include this flag on the organizer emit:**
+
+| Event | Customer toast | Organizer behavior |
+|-------|---------------|-------------------|
+| `order:create` | — | Cache invalidation only (no toast) |
+| `order:confirm` | "Payment successful! Your tickets for X are confirmed." | Cache invalidation; order monitoring table refetches |
+| `order:cancel` | — | Cache invalidation only |
+| `order:expire` | — | Cache invalidation only |
+| `order:refund` | "Refund of X has been processed for Y." | Cache invalidation; `refundAmount` stripped from organizer payload |
+| `refund:completed` | "Your refund request for X has been completed." | Cache invalidation; refund-requests table refetches |
+
+**Constraint:** `organizerNotification` is an internal routing hint — it MUST NOT be forwarded to the REST API or stored. It is only valid inside the SSE payload on a `user:{organizerId}` channel emit.
 
 **Forbidden fields in any SSE payload:**
 
@@ -309,6 +353,10 @@ MUST invalidate and MUST NOT invalidate.
 | `ORDER_CANCELLED` | `'Order'` | `'Ticket'`, `'Event'`, `'TicketType'` |
 | `ORDER_EXPIRED` | `'Order'` | `'Ticket'`, `'Event'`, `'TicketType'` |
 | `ORDER_REFUNDED` | `'Order'` | `'Ticket'`, `'Event'`, `'TicketType'` |
+| `REFUND_REQUEST_CREATED` | `'RefundRequest'` | `'Order'`, `'Event'`, `'TicketType'` |
+| `REFUND_REQUEST_REJECTED` | `'RefundRequest'` | `'Order'`, `'Event'`, `'TicketType'` |
+| `REFUND_REQUEST_COMPLETED` | `'RefundRequest'` | `'Order'`, `'Event'`, `'TicketType'` |
+| `REFUND_REQUEST_FAILED` | `'RefundRequest'` | `'Order'`, `'Event'`, `'TicketType'` |
 | `TICKET_ISSUED` | `'Ticket'` | `'Order'`, `'Event'` |
 | `TICKET_CHECKED_IN` | `'Ticket'` | all others |
 | `ORGANIZATION_*` | `'Organizer'` | all others |
@@ -538,16 +586,27 @@ emit bridges this gap.
 
 ---
 
-### SSE-007: Order and ticket SSE events MUST ONLY go to user:{userId}
+### SSE-007: Order and ticket SSE events MUST NEVER go to shared channels
 
 **Normative statement:**
 `order:create`, `order:confirm`, `order:cancel`, `order:expire`, `order:refund`,
-`ticket:issue`, and `ticket:checkin` MUST be emitted exclusively to
-`user:{userId}`. These events MUST NEVER go to `public`, `organizer`, or `admin`.
+`ticket:issue`, and `ticket:checkin` MUST NEVER go to `public`, `organizer`,
+or `admin` channels.
+
+Order events MAY be emitted to **multiple private `user:{id}` channels**
+(customer + organizer via the fan-out pattern in §5.1). Emitting to
+`user:{organizerId}` is permitted because it is a private targeted channel,
+not a shared broadcast. The fan-out emit MUST include `organizerNotification: true`
+so SSEProvider can suppress customer-facing toasts on the organizer's client.
+
+`ticket:issue` and `ticket:checkin` MUST go exclusively to `user:{ticketOwnerId}`
+with NO organizer fan-out (ticket events carry no organizer-relevant signal).
 
 **Why:** Core Rules §5, §6, §8. Order and ticket data contains PII and
-financial history. Broadcasting to shared channels would expose user purchasing
-behavior, order IDs, and attendance patterns to unrelated users.
+financial history. The `organizer` shared channel would expose a specific
+customer's order IDs, ticket counts, and event names to ALL other organizers
+in the system — not just the event owner. The private `user:{organizerId}`
+channel scopes the signal to the correct recipient.
 
 **Applies to:** `SSENotificationService.java`
 
@@ -894,6 +953,73 @@ emitEvent("flexpass:sold",    "public",    ...);
 
 ---
 
+### SSE-020: Refund request lifecycle MUST be observable via targeted private SSE
+
+**Normative statement:**
+The four refund request state transitions MUST emit SSE to the private `user:{id}` channels
+of the specific parties involved — never to shared channels.
+
+| Action | Event | Recipient |
+|--------|-------|-----------|
+| Customer creates refund request | `refund:created` | `user:{organizerId}` |
+| Organizer rejects | `refund:reject` | `user:{customerId}` |
+| Refund processing completes (REFUNDED) | `refund:completed` | `user:{customerId}` + `user:{organizerId}` (two separate emits) |
+| Refund processing fails (REFUND_FAILED) | `refund:failed` | `user:{organizerId}` only |
+
+All four events carry resource type `refund_request` and MUST be declared in
+`sse-service/config/actions.json` with that resource. The `user:{id}` channel
+pattern MUST include `refund_request` in its `allowed_resources` list in
+`sse-service/config/channels.json`.
+
+**Why:** Refund requests contain PII (customer name, email), financial amounts,
+and order IDs. They MUST NOT go to the shared `organizer` channel (all organizers
+would receive them) or the `public` channel. Each party receives only the signals
+relevant to their role in the workflow.
+
+**Applies to:** `SSENotificationService.java`, `RefundRequestService.java`,
+`sse-service/config/actions.json`, `sse-service/config/channels.json`,
+`frontend/src/providers/SSEProvider.tsx`, `frontend/src/stores/types/sse.ts`
+
+**Payload shapes:**
+- `refund:created` → `{ refundRequestId, orderId, eventId, eventName, requesterName }`
+- `refund:reject` → `{ refundRequestId, orderId, eventId, eventName, reviewNote? }`
+- `refund:completed` (customer emit) → `{ refundRequestId, orderId, eventId, eventName }`
+- `refund:completed` (organizer emit) → `{ refundRequestId, orderId, eventId, eventName, organizerNotification: true }`
+- `refund:failed` → `{ refundRequestId, orderId, eventId, eventName }`
+
+**SSE service config note:** `sse-service/channel_manager.py` resolves
+`allowed_resources` by looking up the `resource` field declared in `actions.json`
+for each action. New resource types (e.g., `refund_request`) MUST be declared via
+the `resource` field in `actions.json` — the fallback key-parsing method only
+knows a hardcoded set of legacy resource names.
+
+**Compliant:**
+```java
+// After refund request is saved to DB:
+sseNotificationService.notifyRefundRequestCreated(
+    refundRequestId, organizerUserId, orderId, eventId, eventName, requesterName);
+
+// After rejection is committed:
+sseNotificationService.notifyRefundRequestRejected(
+    refundRequestId, customerId, orderId, eventId, eventName, reviewNote);
+
+// After refund is processed successfully:
+sseNotificationService.notifyRefundRequestCompleted(
+    refundRequestId, customerId, organizerUserId, orderId, eventId, eventName);
+
+// After processing fails:
+sseNotificationService.notifyRefundRequestFailed(
+    refundRequestId, organizerUserId, orderId, eventId, eventName);
+```
+
+**Forbidden:**
+- Emitting `refund:created` to the `organizer` shared channel
+- Emitting any refund request event to the `public` channel
+- Emitting `refund:completed` to both users in a single merged emit
+- Emitting before the DB transaction commits (SSE-008 applies)
+
+---
+
 ## 10. Forbidden Behaviors
 
 The following behaviors MUST NOT exist anywhere in the system:
@@ -913,8 +1039,12 @@ The following behaviors MUST NOT exist anywhere in the system:
 5. **FORBIDDEN:** Including price, currency, capacity, or inventory fields
    in any SSE payload, except `refundAmount` in `order:refund` on `user:{userId}`. (SSE-003, §7.2)
 
-6. **FORBIDDEN:** Emitting `order:*` or `ticket:*` events to any channel
-   other than `user:{userId}`. (SSE-007)
+6. **FORBIDDEN:** Emitting `order:*` events to `public`, `organizer`, or `admin`
+   channels. Fan-out to `user:{organizerId}` is the only permitted non-customer
+   emit, and it MUST include `organizerNotification: true`. (SSE-007)
+
+6a. **FORBIDDEN:** Emitting `ticket:issue` or `ticket:checkin` to any channel
+    other than `user:{ticketOwnerId}`. No organizer fan-out for ticket events. (SSE-007)
 
 7. **FORBIDDEN:** Invalidating `'Order'` cache in response to Event or
    TicketType SSE events. (SSE-010)
@@ -961,6 +1091,17 @@ The following behaviors MUST NOT exist anywhere in the system:
 
 20. **FORBIDDEN:** Emitting `flexpass:expire` before the expiry is committed to the
     database, or emitting `order:refund` before the refund record is committed. (SSE-008)
+
+21. **FORBIDDEN:** Emitting `refund:created`, `refund:reject`, `refund:completed`, or
+    `refund:failed` to any shared channel (`public`, `organizer`, `admin`). (SSE-020)
+
+22. **FORBIDDEN:** Emitting a single `refund:completed` to a merged audience — customer
+    and organizer MUST receive separate emits on their own `user:{id}` channels. (SSE-020)
+
+23. **FORBIDDEN:** Declaring a new resource type (e.g., `refund_request`) in
+    `channels.json` without also declaring it via the `resource` field in each
+    corresponding entry in `actions.json`. The `channel_manager.py` key-parsing
+    fallback does NOT know new resource names. (SSE-020)
 
 ---
 
@@ -1059,11 +1200,19 @@ The following behaviors MUST NOT exist anywhere in the system:
 
 ## 15. Notes & Open Questions
 
-### N-1: Refund workflow implementation status
-`order:refund` SSE requires a refund workflow to exist in the backend.
-The current codebase does not have a `RefundService` or `order:refund` action.
-This rule is normative but cannot be implemented until the refund domain is built.
-See openspec change `2026-03-10-sse-integrity-compliance` task M-008.
+### N-1: Refund workflow — CLOSED (implemented 2026-04-16)
+`order:refund` SSE (SSE-005) and the full refund request lifecycle (SSE-020) are
+both implemented. `RefundRequestService.java` handles create/review/process logic
+and calls `SSENotificationService` at each state transition. The four refund request
+actions (`refund:created`, `refund:reject`, `refund:completed`, `refund:failed`) are
+registered in `actions.json` and `channels.json`. `SSEProvider.tsx` handles all four
+events with cache invalidation and role-appropriate toast notifications.
+
+**Known issue resolved 2026-04-16:** `sse-service/channel_manager.py` was extracting
+the resource from action keys using a hardcoded string-parsing whitelist that did not
+include `refund_request`. Fixed by using `action_info.get('resource')` from
+`actions.json` directly, falling back to string parsing only when the field is absent.
+See SSE-020 for the normative requirement.
 
 ### N-2: useSSESync.ts audit required
 An audit agent identified `frontend/src/hooks/useSSESync.ts` as a possible
@@ -1093,7 +1242,7 @@ events are introduced.
 
 ## 16. [NON-NORMATIVE] Current Implementation Gap Summary
 
-_This section records the compliance status as of 2026-03-12. It is
+_This section records the compliance status as of 2026-04-16. It is
 non-normative and will be updated as gaps are closed. Do NOT use this
 section as a substitute for the normative rules above._
 
@@ -1103,7 +1252,7 @@ section as a substitute for the normative rules above._
 | SSE-002 | **PARTIALLY COMPLIANT** | Fixed: parent-event routing done. Pending: TicketType state routing (DRAFT TT on PUBLISHED event → `organizer,admin`) — requires `ticket_type:activate` action |
 | SSE-003 | **COMPLIANT** | Fixed: `notifyEventCreated()` now takes minimal params; no full DTOs |
 | SSE-004 | **COMPLIANT** | EventService state machine enforces PUBLISHED precondition |
-| SSE-005 | **NOT IMPLEMENTED** | No `order:refund` event, no refund flow, no SSEAction, no SSEProvider handler |
+| SSE-005 | **COMPLIANT** | `order:refund` event implemented in backend and SSEProvider; emitted to `user:{userId}` after refund processing |
 | SSE-006 | **NOT IMPLEMENTED** | `notifyInvitationCreated()` emits to `organizer` only; no `user:{inviteeId}` emit |
 | SSE-007 | **COMPLIANT** | All `notifyOrder*` and `notifyTicket*` methods use `user:{userId}` exclusively |
 | SSE-008 | **UNKNOWN** | Must verify that all `notify*()` calls are outside `@Transactional` boundaries |
@@ -1112,10 +1261,11 @@ section as a substitute for the normative rules above._
 | SSE-011 | **COMPLIANT** | TicketType deactivation does not invalidate Order cache |
 | SSE-012 | **COMPLIANT** | Fixed: `EventApi.ts getPublicEvents` now sends `status=PUBLISHED` filter |
 | SSE-013 | **COMPLIANT** | OrderExpiryScheduler updates DB before emitting; REST API returns correct state |
-| SSE-014 | **UNKNOWN** | `useSSESync.ts` may duplicate invalidation logic; requires audit (N-2) |
+| SSE-014 | **PARTIAL** | SSEProvider is the authoritative cache invalidation location. Organizer refund-requests page uses `useSSE()` + `refetch()` with event-type guard — compliant with SSE-014 constraints. `useSSESync.ts` audit still pending (N-2). |
 | SSE-015 | **COMPLIANT** | `ownerId` does not appear in public channel payloads |
 | SSE-016 | **UNKNOWN** | Reconnect behavior not verified in SSEProvider |
 | SSE-017 | **PARTIALLY COMPLIANT** | DRAFT TT on PUBLISHED event routing not yet split; private channels correctly scoped |
+| SSE-020 | **COMPLIANT** | All 4 refund request events implemented: `actions.json`, `channels.json` (with `refund_request` resource), `SSENotificationService.java`, `RefundRequestService.java`, `SSEProvider.tsx`. `channel_manager.py` bug fixed (2026-04-16) to use `action_info.get('resource')`. |
 | SSE-NEW-01 | **NOT IMPLEMENTED** | `ticket_type:activate` action does not exist yet in actions.json or backend |
 | SSE-NEW-02 | **NOT IMPLEMENTED** | `TICKET_TYPE_ACTIVATED` not in `SSENormalizedType` enum or SSEProvider handler |
 | SSE-018 | **NOT IMPLEMENTED** | FlexPass backend not built; no `flexpass:list`, `flexpass:cancel` actions or routing |
@@ -1158,10 +1308,14 @@ DRAFT event      | delete                        | organizer,admin  ✅
 DRAFT→PUBLISHED  | publish                       | public,organizer ✅
 PUBLISHED event  | update (metadata fields only) | public,organizer ✅
 PUBLISHED→CANCEL | cancel (transition)           | public,organizer ✅
-CANCELLED event  | refund (per order)            | user:{userId}    ← SSE-005 not implemented
+CANCELLED event  | refund (per order)            | user:{userId}    ✅ SSE-005
 SOLD_OUT event   | (no separate SSE — derived)   | —
 Order (any)      | create                        | user:{userId}    ✅
 Order (any)      | confirm                       | user:{userId}    ✅
 Order (any)      | cancel/expire                 | user:{userId}    ✅
 Invitation       | create                        | organizer + user:{inviteeId}  ← SSE-006 partial
+RefundRequest    | created (by customer)         | user:{organizerId}  ✅ SSE-020
+RefundRequest    | rejected (by organizer)       | user:{customerId}   ✅ SSE-020
+RefundRequest    | completed (REFUNDED)          | user:{customerId} + user:{organizerId}  ✅ SSE-020
+RefundRequest    | failed (REFUND_FAILED)        | user:{organizerId}  ✅ SSE-020
 ```
