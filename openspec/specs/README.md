@@ -1,6 +1,6 @@
 # Evena — Spec Index
 
-**Version:** 2.0 · **Date:** 2026-04-05
+**Version:** 2.1 · **Date:** 2026-05-01
 
 ## Structure
 
@@ -46,18 +46,30 @@ specs/
 │   ├── flexpass.md         /api/flexpass
 │   └── monitor.md          /api/activity-log
 │
-└── services/               ← service layer business logic
-    ├── README.md           ← service index
-    ├── auth-service.md
-    ├── organization-service.md
-    ├── event-service.md
-    ├── ticket-type-service.md
-    ├── order-service.md
-    ├── ticket-service.md
-    ├── payment-service.md
-    ├── flexpass-service.md
-    ├── notification-service.md
-    └── scheduler.md
+├── services/               ← service layer business logic
+│   ├── README.md           ← service index
+│   ├── auth-service.md
+│   ├── organization-service.md
+│   ├── event-service.md
+│   ├── ticket-type-service.md
+│   ├── order-service.md
+│   ├── ticket-service.md
+│   ├── payment-service.md
+│   ├── flexpass-service.md
+│   ├── notification-service.md
+│   └── scheduler.md
+│
+├── frontend/               ← frontend component rules
+│   ├── README.md           ← stack, layout, routing overview
+│   └── organizer-dashboard.md  ← Sidebar, EventFilters, DashboardHeader, FileUploadManager, layout rules
+│
+└── testing/                ← E2E test specs (Playwright)
+    ├── README.md           ← test project structure + quick links
+    ├── e2e-setup.md        ← playwright.config.ts, projects, auth setup, env vars
+    ├── e2e-conventions.md  ← POM contract, naming, cleanup rule, API helpers, selector priority
+    ├── e2e-admin.md        ← category / venue / organizations / refunds test tables
+    ├── e2e-organizer.md    ← organizations / events test tables
+    └── e2e-auth.md         ← login / logout / register test tables
 ```
 
 ## Quick links
@@ -72,3 +84,7 @@ specs/
 | SSE events | [sse-flow-spec.md](sse-flow-spec.md) |
 | FlexPass transfer | [objects/flexpass/ticket-transfer.md](objects/flexpass/ticket-transfer.md) · [services/flexpass-service.md](services/flexpass-service.md) |
 | QR signing | [objects/order/ticket.md](objects/order/ticket.md) · [services/ticket-service.md](services/ticket-service.md) |
+| Frontend component rules | [frontend/README.md](frontend/README.md) |
+| Organizer dashboard components | [frontend/organizer-dashboard.md](frontend/organizer-dashboard.md) |
+| E2E test setup | [testing/e2e-setup.md](testing/e2e-setup.md) |
+| E2E conventions & helpers | [testing/e2e-conventions.md](testing/e2e-conventions.md) |

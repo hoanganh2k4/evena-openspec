@@ -59,6 +59,28 @@
 }
 ```
 
+### EventListResponse (returned by `GET /my-events`)
+
+```json
+{
+  "id": "uuid",
+  "title": "...",
+  "status": "PUBLISHED",
+  "startAt": "...",
+  "endAt": "...",
+  "coverUrl": "...",
+  "categoryName": "Âm nhạc",
+  "organizationName": "...",
+  "venueName": "...",
+  "totalTicketTypes": 2,
+  "soldTickets": 10
+}
+```
+
+**Important:** `EventListResponse` contains `categoryName` (string), **not** `categoryId`.  
+Client-side code must not attempt to compare `event.categoryId` — the field does not exist in this response.  
+To filter by category: look up the category name from the categories list, then compare `event.categoryName === name`.
+
 ---
 
 ## `/api/events/{eventId}/images`
