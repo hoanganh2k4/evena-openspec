@@ -7,9 +7,12 @@
 ```
 push → staging
        ├── gateway repo  → build nginx image  → push GHCR → SSH VM → docker pull + up
-       ├── backend repo  → build Spring Boot  → push GHCR → SSH VM → docker pull + up
+       ├── backend repo  → CodeQL scan → build Spring Boot → push GHCR → SSH VM → docker pull + up
        ├── sse-service   → build FastAPI       → push GHCR → SSH VM → docker pull + up
        └── frontend repo → Vercel deploy (không qua GHCR)
+
+schedule (mỗi thứ Hai 08:00 UTC)
+       └── backend repo  → CodeQL Security Analysis (weekly CVE scan)
 ```
 
 **Chiến lược: Cách B — Build trên CI, VM chỉ pull image**
@@ -261,6 +264,60 @@ jobs:
           # PR → preview deploy
           vercel-args: ${{ github.ref == 'refs/heads/staging' && '--prod' || '' }}
 ```
+
+### 2.5 backend repo — CodeQL Security Analysis
+
+File: `.github/workflows/codeql.yml` trong **backend repo**
+
+```yaml
+name: CodeQL Security Analysis
+
+on:
+  push:
+    branches: [staging, main]
+  pull_request:
+    branches: [staging, main]
+  schedule:
+    # Chạy mỗi thứ Hai 08:00 UTC để phát hiện CVE mới
+    - cron: '0 8 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze Java (CodeQL)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java
+          queries: security-and-quality
+
+      - name: Build (skip tests)
+        run: mvn -B clean compile -DskipTests
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:java
+```
+
+Kết quả xem tại: **Security → Code scanning** (filter `branch:staging`).
+
+> **Lưu ý:** Repo phải ở chế độ **Public** hoặc có GitHub Advanced Security để CodeQL upload SARIF results.
 
 ---
 

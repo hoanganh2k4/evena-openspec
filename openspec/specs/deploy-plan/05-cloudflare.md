@@ -134,7 +134,87 @@ ls -la /home/deploy/evena/gateway/ssl/
 
 ---
 
-## Bước 5 — Kiểm tra
+## Bước 5 — Web Application Firewall (WAF)
+
+WAF chỉ áp dụng cho `api.evena.id.vn` (Proxied). `sse.evena.id.vn` là DNS only nên bypass WAF — được bảo vệ bằng JWT auth và nginx.
+
+### 5.1 — Tạo 5 Custom Rules
+
+Vào **Security → Security rules → Create rule** (chọn Custom rules):
+
+#### Rule 1: Block SQL Injection
+```
+(http.request.uri.query contains "'") or
+(http.request.uri.query contains "UNION SELECT") or
+(http.request.uri.query contains "%27")
+```
+Action: **Block**
+
+#### Rule 2: Block XSS
+```
+(http.request.uri.query contains "<script") or
+(http.request.uri.query contains "%3Cscript") or
+(http.request.uri.query contains "%3cscript") or
+(http.request.uri.query contains "javascript:")
+```
+Action: **Block**
+
+#### Rule 3: Block Path Traversal
+```
+(http.request.uri.query contains "../") or
+(http.request.uri.query contains "..%2F") or
+(http.request.uri.query contains "%2e%2e") or
+(http.request.uri.path contains "../") or
+(http.request.uri.path contains "..%2F")
+```
+Action: **Block**
+
+#### Rule 4: Block Attack Scanners
+```
+(http.user_agent contains "sqlmap") or
+(http.user_agent contains "nikto") or
+(http.user_agent contains "nmap") or
+(http.user_agent contains "masscan") or
+(http.user_agent contains "hydra") or
+(http.user_agent contains "zgrab")
+```
+Action: **Block**
+
+#### Rule 5: Block SSRF
+```
+(http.request.uri.query contains "localhost") or
+(http.request.uri.query contains "127.0.0.1") or
+(http.request.uri.query contains "169.254.") or
+(http.request.uri.query contains "::1") or
+(http.request.uri.query contains "internal")
+```
+Action: **Block**
+
+> **Lưu ý:** Free plan cho phép tối đa 5 custom rules — đã dùng đủ 5.
+
+### 5.2 — Bật Bot Fight Mode & Browser Integrity Check
+
+Vào **Security → Settings** → filter **Bot traffic**:
+- **Bot Fight Mode**: ON
+- **Browser Integrity Check**: ON (thường đã bật mặc định)
+
+### 5.3 — Kiểm tra WAF hoạt động
+
+```bash
+# Path traversal — phải trả về 403
+curl -si "https://api.evena.id.vn/api/events?file=../../etc/passwd" | head -3
+# Expected: HTTP/2 403
+
+# SQL injection — phải trả về 403
+curl -si "https://api.evena.id.vn/api/events?id=1'+OR+'1'='1" | head -3
+# Expected: HTTP/2 403
+```
+
+Xem events bị block: **Security → Analytics** → filter **Action: Block**.
+
+---
+
+## Bước 6 — Kiểm tra
 
 ```bash
 # api subdomain (qua Cloudflare proxy)

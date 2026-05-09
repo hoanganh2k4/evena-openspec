@@ -1,7 +1,19 @@
 # Evena — Production Deployment Documentation
 
-> **Cập nhật lần cuối:** 2026-04-29  
+> **Cập nhật lần cuối:** 2026-05-10  
 > **Trạng thái:** Production đang chạy
+
+> **Thay đổi quan trọng (2026-05-06):**
+> - PostgreSQL **di chuyển ra khỏi Docker** sang Cloud managed. Container `postgres` không còn trong stack.
+> - `SPRING_DATASOURCE_URL` phải set đầy đủ trong `.env.prod` (không còn hard-code trong docker-compose).
+> - Nginx cập nhật: Cloudflare real IP, rate limiting theo zone, geo whitelist cho performance test.
+
+> **Thay đổi quan trọng (2026-05-10) — Security hardening:**
+> - **CodeQL** tích hợp CI/CD (`codeql.yml`) — scan mỗi push lên staging/main + weekly schedule.
+> - **Cloudflare WAF** — 5 custom rules: SQL injection, XSS, Path traversal, Attack scanners, SSRF. Bot Fight Mode ON.
+> - **nginx** — H2C smuggling prevention, host-header injection fix, non-root containers.
+> - **Backend** — Actuator restricted to ADMIN role, log injection sanitized, arithmetic overflow guard.
+> - **Frontend** — ESLint security plugins, next.js upgraded to 16.2.6 (CSRF patch).
 
 ---
 
