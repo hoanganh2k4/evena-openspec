@@ -43,12 +43,19 @@
 │       │                                                      │
 │  ┌────┼───────────────────────────────────┐                 │
 │  │    │  Internal Docker network          │                 │
-│  │  ┌─▼──────┐  ┌──────────┐  ┌────────┐ │                 │
-│  │  │Postgres│  │  MinIO   │  │ Redis  │ │                 │
-│  │  │ :5432  │  │:9000/9001│  │ :6379  │ │                 │
-│  │  └────────┘  └──────────┘  └────────┘ │                 │
+│  │    ▼  ┌──────────┐  ┌────────┐        │                 │
+│  │       │  MinIO   │  │ Redis  │        │                 │
+│  │       │:9000/9001│  │ :6379  │        │                 │
+│  │       └──────────┘  └────────┘        │                 │
 │  └───────────────────────────────────────┘                 │
-└─────────────────────────────────────────────────────────────┘
+│       │ JDBC (ra ngoài Docker network)                      │
+└───────┼─────────────────────────────────────────────────────┘
+        ▼
+┌───────────────────────────────────────┐
+│  Cloud PostgreSQL (managed, external) │
+│  Host: SPRING_DATASOURCE_URL (.env)   │
+│  Không chạy trong Docker container    │
+└───────────────────────────────────────┘
 ```
 
 ---
@@ -81,7 +88,7 @@ Backend sinh URL dạng `https://api.evena.id.vn/storage/event-images/photo.jpg`
 | Frontend | **Vercel** | Zero-config Next.js, CDN toàn cầu, free tier |
 | Backend | **GCE VM + Docker** | Persistent disk, long-running process, full control |
 | SSE Service | **GCE VM + Docker** | Long-lived connections không phù hợp Cloud Run/serverless |
-| PostgreSQL | **Docker trên VM** | Thesis project — Cloud SQL ~$7/tháng là không cần thiết |
+| PostgreSQL | **Cloud managed (external)** | Di chuyển ra khỏi Docker để tách biệt data tier, tăng độ tin cậy |
 | Redis | **Docker trên VM** | SSE state, session — Memorystore ~$16/tháng quá đắt |
 | MinIO | **Docker trên VM** | S3-compatible self-hosted, không cần Google Cloud Storage |
 | Gateway | **Nginx trên VM** | Cùng Docker network với backend, zero latency |

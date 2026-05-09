@@ -26,14 +26,24 @@ API_DOMAIN=api.evena.id.vn
 SSE_DOMAIN=sse.evena.id.vn
 ```
 
-### Database (PostgreSQL)
+### Database (Cloud PostgreSQL)
+
+> **Quan trọng:** PostgreSQL không còn chạy trong Docker container. DB đã được chuyển sang Cloud managed.
+> Container `postgres` trong `docker-compose.prod.yml` đã bị comment out.
 
 ```env
+# Full JDBC URL đến Cloud PostgreSQL — giá trị này ghi đè spring.datasource.url
+SPRING_DATASOURCE_URL=jdbc:postgresql://<cloud-host>:<port>/<db_name>
+
+# Các biến này vẫn cần nếu docker-compose truyền riêng lẻ (dùng cho healthcheck hoặc scripts)
 DB_NAME=eventdb
-DB_USERNAME=postgres
+DB_USERNAME=evena_user
 DB_PASSWORD=<strong_password>
 ```
 
+> `SPRING_DATASOURCE_URL` phải chứa full connection string dạng:
+> `jdbc:postgresql://HOST:5432/DBNAME?sslmode=require`
+>
 > Sinh password mạnh: `openssl rand -hex 16`
 
 ### Redis
@@ -59,6 +69,17 @@ ADMIN_PASS=<admin_password>     # Password đăng nhập tài khoản admin
 
 > `JWT_SECRET` phải ≥ 64 ký tự.  
 > `QR_SECRET` phải ≥ 32 ký tự.
+
+### Rate Limiting — Whitelist
+
+```env
+# IP hoặc CIDR được bypass rate limit (dùng cho JMeter/performance test).
+# Dạng: IP/32 hoặc CIDR, nhiều giá trị cách nhau dấu phẩy.
+RATE_LIMIT_WHITELIST_IPS=116.108.115.97/32
+```
+
+> Cập nhật giá trị này khi public IP của máy test thay đổi.
+> Được inject vào container backend và dùng bởi Spring Boot rate limit filter.
 
 ### Frontend URL
 
@@ -150,8 +171,8 @@ Các biến sau KHÔNG cần trong `.env.prod` vì `docker-compose.prod.yml` đ�
 | Biến | Giá trị cố định |
 |------|----------------|
 | `SERVER_PORT` | 8080 |
-| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://postgres:5432/${DB_NAME}` |
 | `SPRING_JPA_SHOW_SQL` | false |
+| `SPRING_JPA_HIBERNATE_DDL_AUTO` | update |
 | `APP_STORAGE_ENDPOINT` | `http://minio:9000` |
 | `APP_STORAGE_PUBLIC_URL` | `https://${API_DOMAIN}/storage` |
 | `APP_SSE_URL` | `http://sse:8000` |
@@ -159,3 +180,6 @@ Các biến sau KHÔNG cần trong `.env.prod` vì `docker-compose.prod.yml` đ�
 | `SECURE_COOKIE` | true |
 | `USE_REDIS` | true |
 | `REDIS_URL` | `redis://redis:6379` |
+
+> **Lưu ý:** `SPRING_DATASOURCE_URL` **không còn** được hard-code trong docker-compose.
+> Phải đặt giá trị đầy đủ trong `.env.prod` (Cloud PostgreSQL connection string).

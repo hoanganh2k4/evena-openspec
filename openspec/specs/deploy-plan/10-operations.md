@@ -72,23 +72,24 @@ curl -N "https://sse.evena.id.vn/sse/stream/public"
 
 ## Backup PostgreSQL
 
-### Tự động (cron hàng ngày lúc 2:00 AM)
-```bash
-mkdir -p /home/deploy/backups
+> **Lưu ý:** PostgreSQL không còn chạy trong Docker. Container `evena-postgres` không tồn tại.
+> Database đang là Cloud managed PostgreSQL — backup do cloud provider quản lý tự động.
 
-(crontab -l 2>/dev/null; echo "0 2 * * * docker exec evena-postgres pg_dump -U postgres eventdb | gzip > /home/deploy/backups/db_\$(date +\%Y\%m\%d).sql.gz && find /home/deploy/backups -name 'db_*.sql.gz' -mtime +7 -delete") | crontab -
-```
-
-### Backup thủ công
+### Backup thủ công (từ xa, dùng psql client)
 ```bash
-docker exec evena-postgres pg_dump -U postgres eventdb | gzip > /home/deploy/backups/db_manual.sql.gz
+# Cần cài psql client trên máy local hoặc VM
+pg_dump "$(grep SPRING_DATASOURCE_URL /home/deploy/evena/gateway/.env.prod | cut -d= -f2-)" \
+  | gzip > /home/deploy/backups/db_manual_$(date +%Y%m%d).sql.gz
 ```
 
 ### Restore
 ```bash
-gunzip -c /home/deploy/backups/db_20260429.sql.gz | \
-  docker exec -i evena-postgres psql -U postgres eventdb
+# Lấy connection string từ .env.prod
+DB_URL=$(grep SPRING_DATASOURCE_URL /home/deploy/evena/gateway/.env.prod | cut -d= -f2-)
+gunzip -c /home/deploy/backups/db_manual_20260429.sql.gz | psql "$DB_URL"
 ```
+
+> Backup tự động nên được cấu hình trên Cloud Console của provider (snapshot hàng ngày, retention 7 ngày).
 
 ---
 
