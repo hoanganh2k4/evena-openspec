@@ -26,14 +26,14 @@
 ### `rejectListing(Long listingId)` — ORGANIZER | ADMIN
 `transfer.status ← REJECTED`; `ticket.status ← ACTIVE`.
 
-### `purchaseListing(Long listingId)`
+### `purchaseListing(Long listingId)` — implemented in `FlexPassCheckoutService`
 1. Guard: `transfer.status == PRICE_LOCKED` (not APPROVED — purchase only allowed during an active sale window)
 2. Guard: buyer ≠ seller
 3. `transfer.buyer ← currentUser`; `transfer.status ← PAYMENT_PENDING`
 4. Create escrow payment at `transfer.finalPrice` via `PaymentService`
 5. Return payment URL / QR
 
-### `completeTransfer(Long transferId, UUID buyerId)` — `@Transactional`
+### `completeTransfer(Long purchaseId, UUID buyerId)` — `@Transactional` — in `FlexPassPurchaseTransactionalService`
 
 **All 6 steps in one transaction. Rollback on any failure.**
 
@@ -48,18 +48,26 @@
 
 Post-commit: emit SSE `flexpass:sold` → seller + buyer; send emails; log with old/new QR.
 
-### `failTransfer(Long transferId)`
-- If sale window still `ACTIVE`: `transfer.status ← PRICE_LOCKED` (available for next buyer)
-- If sale window `CLOSED` or null: `transfer.status ← EXPIRED`; `ticket.status ← ACTIVE`
-- Emit SSE `flexpass:failed`; log.
+### `failTransfer(Long purchaseId)` — in `FlexPassPurchaseTransactionalService`
+- `transfer.status ← FAILED`; `ticket.status ← ACTIVE`
+- Emit SSE `flexpass:transfer_failed`; log.
 
-### `expireListings()` — `@Scheduled`
-Find `APPROVED` listings where `expires_at ≤ now`:
+### `expireListings()` — `@Scheduled` *(not yet implemented)*
+Planned: find `APPROVED` listings where `expires_at ≤ now`:
 `transfer.status ← EXPIRED`; `ticket.status ← ACTIVE`; log.
 
 ---
 
 ## Price discovery
+
+### `getOrganizerListings()` — ORGANIZER | ADMIN
+
+- If caller has `ADMIN` role: returns **all** listings system-wide (`findAllWithDetails()`)
+- Otherwise: returns listings for events belonging to the caller's organization (`findByEventOrganizerId(currentUser.id)`)
+
+### `getAllSaleWindows()` — ADMIN only
+
+Returns all `FlexPassSaleWindow` records across all events. Called from `GET /admin/sale-windows`.
 
 ### `getPriceAnalysis(UUID eventId)` — ORGANIZER | ADMIN
 
@@ -78,12 +86,12 @@ Return all 3 per ticket type plus:
 
 > See rules.md §9.9 for the full trimming table (edge cases when `listingCount < 3` or `< 10`).
 
-### `createSaleWindow(UUID eventId, CreateSaleWindowRequest)` — ORGANIZER
+### `createSaleWindow(CreateFlexPassSaleWindowRequest)` — ORGANIZER | ADMIN
 
-1. Guard: event exists and belongs to currentUser's organization
-2. Guard: no other sale window in `SCHEDULED` or `ACTIVE` state for this event
-3. Guard: `saleStart > now` and `saleStart < saleEnd`
-4. For each ticket type: compute `selectedPrice` using the chosen `priceMethod`
+1. Guard: event exists and belongs to currentUser's organization (or caller is ADMIN)
+2. Guard: no overlapping window in `SCHEDULED` or `OPENED` state for this event
+3. Guard: `startAt > now` and `startAt < endAt`
+4. For each ticket type: compute `selectedPrice` using per-ticket-type `pricingMethod` (default `TRIMMED_MEAN`)
 5. Create `FlexPassSaleWindow(status=SCHEDULED)` with per-ticket-type prices stored
 6. Return `SaleWindowResponse` with all `selectedPrice` values so organizer can review before window opens
 
@@ -91,7 +99,7 @@ Return all 3 per ticket type plus:
 
 **All steps in one `@Transactional`:**
 1. Load `FlexPassSaleWindow`; guard: `status == SCHEDULED`
-2. `saleWindow.status ← ACTIVE`
+2. `saleWindow.status ← OPENED`
 3. For each `APPROVED` listing under this event:
    - Look up `selectedPrice` for listing's `ticketTypeId` from window data
    - `transfer.finalPrice ← selectedPrice`
@@ -105,16 +113,17 @@ Post-commit:
 ### `closeSaleWindow(Long saleWindowId)` — `@Scheduled` (fires when `saleEnd` is reached)
 
 **All steps in one `@Transactional`:**
-1. `saleWindow.status ← CLOSED`
+1. Load `FlexPassSaleWindow`; guard: `status == OPENED`
+2. `saleWindow.status ← CLOSED`
 2. For each `PRICE_LOCKED` listing under this window:
    - `transfer.status ← EXPIRED`; `ticket.status ← ACTIVE`
 3. For each `PAYMENT_PENDING` listing (buyer in progress): leave as-is — payment callback will resolve
 
 Post-commit: emit SSE `flexpass:window_closed` to `organizer` channel; log.
 
-### `cancelSaleWindow(Long saleWindowId)` — ORGANIZER
+### `cancelSaleWindow(Long saleWindowId)` — ORGANIZER | ADMIN
 
-1. Guard: `saleWindow.status == SCHEDULED` (cannot cancel an ACTIVE window)
+1. Guard: `saleWindow.status == SCHEDULED` (cannot cancel an OPENED window)
 2. `saleWindow.status ← CANCELLED`
 3. No listing state changes — listings remain APPROVED
 

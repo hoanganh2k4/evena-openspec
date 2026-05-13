@@ -10,8 +10,9 @@ Status of a FlexPass resale listing / transfer record.
 | `PRICE_LOCKED` | Sale window opened; `finalPrice` set; purchasable; seller cannot cancel |
 | `PAYMENT_PENDING` | Buyer initiated payment; escrow in progress |
 | `COMPLETED` | Payment confirmed; QR rotated; ownership transferred |
+| `FAILED` | Payment failed (terminal) or post-payment transfer failure; ticket unlocked to seller |
 | `CANCELLED` | Seller cancelled (only allowed before PRICE_LOCKED) |
-| `EXPIRED` | Window elapsed without purchase, or 14-day TTL reached; ticket unlocked |
+| `EXPIRED` | Window closed without purchase, or 14-day TTL reached; ticket unlocked |
 
 ## Transitions
 
@@ -24,13 +25,13 @@ APPROVED         → EXPIRED         (14-day TTL elapsed → ticket.status = ACT
 PRICE_LOCKED     → PAYMENT_PENDING (buyer initiates purchase at finalPrice)
 PRICE_LOCKED     → EXPIRED         (sale window closes without purchase → ticket.status = ACTIVE)
 PAYMENT_PENDING  → COMPLETED       (payment SUCCESS → QR rotation, owner change)
-PAYMENT_PENDING  → PRICE_LOCKED    (payment FAILED and sale window still ACTIVE → available for next buyer)
-PAYMENT_PENDING  → EXPIRED         (payment FAILED and sale window CLOSED → ticket.status = ACTIVE)
+PAYMENT_PENDING  → FAILED          (payment FAILED terminal, or post-payment transfer failure → ticket.status = ACTIVE)
+PAYMENT_PENDING  → PRICE_LOCKED    (payment FAILED and sale window still OPENED → available for next buyer)
 ```
 
 ## Key rules
 
-- `PRICE_LOCKED` listings are **not cancellable** by seller
+- `PRICE_LOCKED` and `PAYMENT_PENDING` listings are **not cancellable** by seller
 - Buyers pay `finalPrice` (aggregated), not `submittedPrice` (seller's input)
 - Only `PRICE_LOCKED` listings accept purchase — `APPROVED` listings are visible but not buyable
 

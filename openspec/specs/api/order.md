@@ -49,6 +49,7 @@
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/my-tickets` | [Auth] | All tickets for caller |
+| GET | `/admin/tickets?page=&size=` | [ADMIN] | All tickets in system (paginated) |
 | GET | `/{ticketId}` | [Auth] | Get ticket by ID |
 | GET | `/qr/{qrPayload}` | [ORGANIZER\|ADMIN] | Get ticket by QR payload |
 | POST | `/{ticketId}/check-in` | [ORGANIZER\|ADMIN] | Confirm check-in by ID |

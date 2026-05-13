@@ -9,7 +9,7 @@
 |---|---|---|---|
 | id | Long | PK, auto-increment | |
 | event_id | UUID | FK → events.id, NOT NULL | |
-| status | SaleWindowStatus | NOT NULL, default=`SCHEDULED` | SCHEDULED → ACTIVE → CLOSED |
+| status | SaleWindowStatus | NOT NULL, default=`SCHEDULED` | SCHEDULED → OPENED → CLOSED |
 | price_method | PriceMethod | NOT NULL | MEDIAN, MEAN, or TRIMMED_MEAN |
 | sale_start | LocalDateTime | NOT NULL | When window opens (future) |
 | sale_end | LocalDateTime | NOT NULL | When window closes |
@@ -50,7 +50,7 @@ Created when the organizer calls `createSaleWindow`.
 | Value | Meaning |
 |---|---|
 | `SCHEDULED` | Window created; not yet open; can be cancelled |
-| `ACTIVE` | Window is open; listings are PRICE_LOCKED; purchases allowed |
+| `OPENED` | Window is open; listings are PRICE_LOCKED; purchases allowed |
 | `CLOSED` | Window ended; unsold PRICE_LOCKED listings → EXPIRED |
 | `CANCELLED` | Organizer cancelled before opening; listings remain APPROVED |
 
@@ -64,17 +64,17 @@ Created when the organizer calls `createSaleWindow`.
 
 ## Constraints
 
-- Only **one** `SCHEDULED` or `ACTIVE` window per event at a time
+- Only **one** `SCHEDULED` or `OPENED` window per event at a time
 - `sale_start > now` at creation time
 - `sale_start < sale_end`
-- Cannot cancel an `ACTIVE` window — only `SCHEDULED` windows can be cancelled
+- Cannot cancel an `OPENED` window — only `SCHEDULED` windows can be cancelled
 - `selected_price` and per-metric prices are computed at creation time and **never recalculated**
   (even if new listings are added after window is created)
 
 ## State machine
 
 ```
-SCHEDULED → ACTIVE     (auto: EventScheduler when sale_start is reached)
-ACTIVE    → CLOSED     (auto: EventScheduler when sale_end is reached)
+SCHEDULED → OPENED     (auto: EventScheduler when sale_start is reached)
+OPENED    → CLOSED     (auto: EventScheduler when sale_end is reached)
 SCHEDULED → CANCELLED  (organizer cancels before sale_start)
 ```

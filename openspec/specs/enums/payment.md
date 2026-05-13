@@ -20,6 +20,7 @@
 | `CASH` | Cash — recorded manually |
 | `CARD` | Card (Stripe or similar) |
 | `MOMO` | MoMo e-wallet (Vietnam) |
+| `VNPAY` | VNPay payment gateway (Vietnam) |
 
 ---
 

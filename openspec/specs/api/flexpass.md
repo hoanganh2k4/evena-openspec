@@ -4,20 +4,41 @@
 
 ---
 
-## Listing endpoints
+## Seller / buyer endpoints
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | POST | `/listings` | [Auth] | Create listing — locks ticket (TRANSFER_LOCKED) |
-| DELETE | `/listings/{id}` | [Auth] | Cancel listing — only allowed while status ∈ {PENDING_APPROVAL, APPROVED} |
-| GET | `/listings?eventId=&page=&size=` | [Public] | Browse marketplace (APPROVED and PRICE_LOCKED only) |
+| PATCH | `/listings/{listingId}/cancel` | [Auth] | Cancel listing — only allowed while status ∈ {PENDING_APPROVAL, APPROVED} |
 | GET | `/listings/my` | [Auth] | Seller's own listings |
-| GET | `/listings/{id}` | [Public] | Listing detail |
-| PATCH | `/listings/{id}/approve` | [ORGANIZER\|ADMIN] | Approve listing |
-| PATCH | `/listings/{id}/reject` | [ORGANIZER\|ADMIN] | Reject — unlocks ticket |
-| POST | `/listings/{id}/purchase` | [Auth] | Buyer purchases — only allowed while status = PRICE_LOCKED |
+| GET | `/listings/{listingId}` | [Auth] | Listing detail |
+
+## Marketplace endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/marketplace/listings?eventId=` | [Public] | Browse marketplace (APPROVED and PRICE_LOCKED only) |
+| POST | `/listings/{listingId}/purchase` | [Auth] | Buyer purchases — only allowed while status = PRICE_LOCKED (handled by FlexPassCheckoutService) |
 
 Payment callback is handled by `/api/payment/callback` (transfer orders identified via `order.type = FLEXPASS`).
+
+## Organizer endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/organizer/listings` | [ORGANIZER\|ADMIN] | All listings for organizer's events (ADMIN gets all system listings) |
+| PATCH | `/organizer/listings/{listingId}/approve` | [ORGANIZER\|ADMIN] | Approve listing |
+| PATCH | `/organizer/listings/{listingId}/reject` | [ORGANIZER\|ADMIN] | Reject — unlocks ticket |
+| GET | `/organizer/events/{eventId}/sale-window` | [ORGANIZER\|ADMIN] | All non-cancelled sale windows for event |
+| GET | `/organizer/events/{eventId}/price-analysis` | [ORGANIZER\|ADMIN] | Calculate all 3 price metrics per ticket type |
+| POST | `/organizer/sale-windows` | [ORGANIZER\|ADMIN] | Schedule a sale window |
+| PATCH | `/organizer/sale-windows/{saleWindowId}/cancel` | [ORGANIZER\|ADMIN] | Cancel a SCHEDULED window |
+
+## Admin endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/admin/sale-windows` | [ADMIN] | All sale windows across all events |
 
 ### CreateListingRequest
 ```json
@@ -52,14 +73,7 @@ Payment callback is handled by `/api/payment/callback` (transfer orders identifi
 
 ---
 
-## Price discovery endpoints
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | `/events/{eventId}/price-analysis` | [ORGANIZER\|ADMIN] | Calculate all 3 price metrics per ticket type |
-| POST | `/events/{eventId}/sale-window` | [ORGANIZER] | Schedule a sale window |
-| GET | `/events/{eventId}/sale-window` | [ORGANIZER\|ADMIN] | Get current sale window |
-| DELETE | `/events/{eventId}/sale-window/{id}` | [ORGANIZER] | Cancel a SCHEDULED window |
+## Price discovery (request/response schemas)
 
 ### PriceAnalysisResponse
 ```json
@@ -86,29 +100,44 @@ Payment callback is handled by `/api/payment/callback` (transfer orders identifi
 ### CreateSaleWindowRequest
 ```json
 {
-  "saleStart": "2026-05-10T10:00:00",
-  "saleEnd":   "2026-05-10T22:00:00",
-  "priceMethod": "TRIMMED_MEAN"
+  "eventId": "uuid",
+  "startAt": "2026-05-10T10:00:00",
+  "endAt":   "2026-05-10T22:00:00",
+  "pricingMethodByTicketTypeId": {
+    "1": "TRIMMED_MEAN",
+    "2": "MEDIAN"
+  }
 }
 ```
 
-> `priceMethod` ∈ {`MEDIAN`, `MEAN`, `TRIMMED_MEAN`}. Defaults to `TRIMMED_MEAN`.
+> `pricingMethodByTicketTypeId` is optional per ticket type key. Any ticket type not present defaults to `TRIMMED_MEAN`.
+> Values ∈ {`MEDIAN`, `MEAN`, `TRIMMED_MEAN`}.
 
 ### SaleWindowResponse
 ```json
 {
   "id": 1,
   "eventId": "uuid",
+  "eventTitle": "...",
   "status": "SCHEDULED",
-  "saleStart": "2026-05-10T10:00:00",
-  "saleEnd": "2026-05-10T22:00:00",
-  "priceMethod": "TRIMMED_MEAN",
-  "ticketTypePrices": [
+  "pricingMethod": "TRIMMED_MEAN",
+  "startAt": "2026-05-10T10:00:00",
+  "endAt": "2026-05-10T22:00:00",
+  "openedAt": null,
+  "closedAt": null,
+  "cancelledAt": null,
+  "createdAt": "...",
+  "updatedAt": "...",
+  "prices": [
     {
       "ticketTypeId": 1,
       "ticketTypeName": "VIP",
       "listingCount": 12,
-      "selectedPrice": 106000.00
+      "medianPrice": 105000.00,
+      "meanPrice": 108500.00,
+      "trimmedMeanPrice": 106000.00,
+      "selectedPrice": 106000.00,
+      "pricingMethod": "TRIMMED_MEAN"
     }
   ]
 }
