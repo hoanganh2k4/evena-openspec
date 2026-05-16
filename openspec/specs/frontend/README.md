@@ -7,7 +7,10 @@
 ```
 specs/frontend/
 ├── README.md                  ← this file
-└── organizer-dashboard.md     ← organizer dashboard components + layout
+├── organizer-dashboard.md     ← organizer dashboard components + layout
+├── admin-dashboard.md         ← admin activity log, anomaly/SSE panels
+├── customer-bookings.md       ← My Orders + My Tickets (pagination, filters)
+└── flexpass-customer.md       ← FlexPass SellTab + MyListingsTab UX rules
 ```
 
 ## Stack
@@ -32,5 +35,8 @@ LayoutWithSidebar (outer bg: #FFFFFF)
 | Topic | File |
 |---|---|
 | Organizer sidebar, profile, event filters, ticket management | [organizer-dashboard.md](organizer-dashboard.md) |
+| Admin activity log, anomaly/SSE panels | [admin-dashboard.md](admin-dashboard.md) |
+| Customer My Orders + My Tickets (pagination, filters) | [customer-bookings.md](customer-bookings.md) |
+| FlexPass SellTab + MyListingsTab (filter chips, expired re-list) | [flexpass-customer.md](flexpass-customer.md) |
 | Global rules (no hardcoded colors, i18n) | [../rules.md](../rules.md) |
 | Brand color constants | `src/utils/constants/constant.ts` |

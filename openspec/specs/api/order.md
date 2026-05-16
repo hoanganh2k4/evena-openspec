@@ -9,9 +9,17 @@
 | POST | `/` | [Auth] | Create order (status=PENDING) |
 | POST | `/checkout` | [Auth] | Process payment for order |
 | GET | `/{orderId}` | [Auth] | Get order (owner or admin) |
-| GET | `/my-orders?page=&size=` | [Auth] | Caller's orders |
+| GET | `/my-orders?page=&size=&status=` | [Auth] | Caller's orders (status optional) |
 | GET | `/organizer?page=&size=&status=` | [ORGANIZER\|ADMIN] | Orders for organizer's events |
 | PATCH | `/{orderId}/cancel` | [Auth] | Cancel PENDING order |
+
+### my-orders — status filter
+
+`status` is optional. When omitted, all orders are returned.  
+Valid values: `PENDING`, `PROCESSING`, `CONFIRMED`, `CANCELLED`, `EXPIRED`, `REFUNDED`.
+
+Backend uses `(:status IS NULL OR o.status = :status)` JPQL pattern — no separate query needed.  
+Frontend sends a separate `size=1` request for the "All" chip total count to avoid fetching all rows.
 
 ### CreateOrderRequest
 ```json
