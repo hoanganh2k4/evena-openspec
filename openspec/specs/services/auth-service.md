@@ -28,7 +28,9 @@
 3. Guard: `status == ACTIVE`
 4. Generate access JWT (short-lived) + refresh JWT (30 days)
 5. Set refresh token in `HttpOnly; SameSite=Lax; Path=/` cookie
-6. **Clear legacy path cookies** (`Path=/api/auth`, `Path=/api`, `MaxAge=0`) — removes stale cookies from older backend versions that omitted the explicit path
+6. **Clear legacy path cookies** — two `Set-Cookie MaxAge=0` headers per legacy path (`/api/auth`, `/api`):
+   - With `Domain=<cookieDomain>` (e.g. `.evena.id.vn`) — clears wildcard-domain cookies
+   - Without `Domain` attribute — clears host-only cookies (`api.evena.id.vn`) set by older backend versions that had no `cookie-domain` configured
 7. Return `LoginResponse` (refresh token omitted from body)
 
 ### `refreshAccessToken(String refreshToken)`
