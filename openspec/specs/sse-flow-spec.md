@@ -1103,6 +1103,39 @@ The following behaviors MUST NOT exist anywhere in the system:
     corresponding entry in `actions.json`. The `channel_manager.py` key-parsing
     fallback does NOT know new resource names. (SSE-020)
 
+24. **FORBIDDEN:** Emitting `notification:new` to any channel other than `user:{userId}`. (SSE-021)
+
+25. **FORBIDDEN:** Including any entity data fields in the `notification:new` payload. The data object MUST be empty — it is a pure cache-invalidation signal. (SSE-021)
+
+26. **FORBIDDEN:** Emitting `notification:new` before the `InAppNotification` DB record is committed. (SSE-008, SSE-021)
+
+---
+
+### SSE-021: notification:new MUST be emitted only to user:{id} after DB commit
+
+**Normative statement:**
+`InAppNotificationService.create()` MUST publish a Spring `ApplicationEvent` after saving the notification record. A `@TransactionalEventListener(phase = AFTER_COMMIT)` handler MUST then call `sseNotificationService.emitNotificationNew(userId)`, which emits `notification:new` to `user:{userId}` with an **empty data object**.
+
+The event MUST NOT carry any notification fields (`notificationId`, `title`, `body`, `entityId`, etc.) in the payload. The frontend fetches notification content from the REST API on receipt.
+
+**Channel:** `user:{userId}` exclusively — NEVER `public`, `organizer`, or `admin`.
+
+**Why:** [P-1] SSE is a cache-invalidation signal. Personal notification content is PII and belongs on the REST API behind authentication. Carrying content in SSE payloads would bypass access control and expose data in SSE service logs.
+
+**Event taxonomy addition (Tier C):**
+
+| SSEAction | Trigger | Recipient |
+|-----------|---------|-----------|
+| `notification:new` | InAppNotificationService creates a Notification record | Target user only (`user:{userId}`) |
+
+**Invalidation model addition:**
+
+| SSE Event | MUST Invalidate | MUST NOT Invalidate |
+|-----------|----------------|---------------------|
+| `NOTIFICATION_NEW` | `'Notification'` | All other tags |
+
+**Applies to:** `InAppNotificationServiceImpl.java`, `SSENotificationService.java`, `sse-service/config/actions.json`, `sse-service/config/channels.json`, `frontend/src/providers/SSEProvider.tsx`, `frontend/src/stores/types/sse.ts`
+
 ---
 
 ## 11. Transaction & Delivery Guarantees
@@ -1253,7 +1286,7 @@ section as a substitute for the normative rules above._
 | SSE-003 | **COMPLIANT** | Fixed: `notifyEventCreated()` now takes minimal params; no full DTOs |
 | SSE-004 | **COMPLIANT** | EventService state machine enforces PUBLISHED precondition |
 | SSE-005 | **COMPLIANT** | `order:refund` event implemented in backend and SSEProvider; emitted to `user:{userId}` after refund processing |
-| SSE-006 | **NOT IMPLEMENTED** | `notifyInvitationCreated()` emits to `organizer` only; no `user:{inviteeId}` emit |
+| SSE-006 | **COMPLIANT** | Fixed: `OrganizationMemberService.inviteMember()` resolves inviteeId from email, emits `invitation:create` to `user:{inviteeId}` AND persists `INVITATION_RECEIVED` notification via `InAppNotificationService` |
 | SSE-007 | **COMPLIANT** | All `notifyOrder*` and `notifyTicket*` methods use `user:{userId}` exclusively |
 | SSE-008 | **UNKNOWN** | Must verify that all `notify*()` calls are outside `@Transactional` boundaries |
 | SSE-009 | **COMPLIANT** | Fixed: `SSEProvider.tsx` no longer invalidates `EventAPI`/`TicketTypeAPI` on `ORDER_CONFIRMED` |
@@ -1268,8 +1301,9 @@ section as a substitute for the normative rules above._
 | SSE-020 | **COMPLIANT** | All 4 refund request events implemented: `actions.json`, `channels.json` (with `refund_request` resource), `SSENotificationService.java`, `RefundRequestService.java`, `SSEProvider.tsx`. `channel_manager.py` bug fixed (2026-04-16) to use `action_info.get('resource')`. |
 | SSE-NEW-01 | **NOT IMPLEMENTED** | `ticket_type:activate` action does not exist yet in actions.json or backend |
 | SSE-NEW-02 | **NOT IMPLEMENTED** | `TICKET_TYPE_ACTIVATED` not in `SSENormalizedType` enum or SSEProvider handler |
-| SSE-018 | **NOT IMPLEMENTED** | FlexPass backend not built; no `flexpass:list`, `flexpass:cancel` actions or routing |
-| SSE-019 | **NOT IMPLEMENTED** | No `flexpass:approve`, `flexpass:reject`, `flexpass:sold`, `flexpass:expire` actions; no SSEProvider handlers; no `FlexPassListing` RTK Query tag |
+| SSE-021 | **COMPLIANT** | `InAppNotificationServiceImpl.create()` publishes `NotificationCreatedEvent`; `@TransactionalEventListener(AFTER_COMMIT)` calls `sseNotificationService.emitNotificationNew(userId)`; `notification:new` action added to `actions.json`; `notification` resource added to `user:{id}` in `channels.json`; `NOTIFICATION_NEW` handled in `SSEProvider.tsx` with `NotificationAPI` cache invalidation only. |
+| SSE-018 | **COMPLIANT** | FlexPass implemented: `flexpass:listing_created` and `flexpass:listing_cancelled` go to `organizer,admin`; `flexpass:sale_window_*` go to `organizer,admin`; all correctly routed via `emitToOrganizer()`. Actions registered in `actions.json`. |
+| SSE-019 | **COMPLIANT** | All personal FlexPass outcome events implemented: `flexpass:listing_approved` → `user:{sellerId}`; `flexpass:listing_rejected` → `user:{sellerId}`; `flexpass:listing_expired` → `user:{sellerId}`; `flexpass:price_locked` → `user:{sellerId}`; `flexpass:transfer_completed/failed` → `user:{buyerId}` + `user:{sellerId}` (two separate emits). `FlexPassListing` RTK Query tag handled in `SSEProvider.tsx`. Actions registered in `actions.json`. `flexpass_listing` and `flexpass_purchase` resources added to `user:{id}` in `channels.json`. |
 
 ---
 
@@ -1313,7 +1347,7 @@ SOLD_OUT event   | (no separate SSE — derived)   | —
 Order (any)      | create                        | user:{userId}    ✅
 Order (any)      | confirm                       | user:{userId}    ✅
 Order (any)      | cancel/expire                 | user:{userId}    ✅
-Invitation       | create                        | organizer + user:{inviteeId}  ← SSE-006 partial
+Invitation       | create                        | organizer + user:{inviteeId}  ✅ SSE-006
 RefundRequest    | created (by customer)         | user:{organizerId}  ✅ SSE-020
 RefundRequest    | rejected (by organizer)       | user:{customerId}   ✅ SSE-020
 RefundRequest    | completed (REFUNDED)          | user:{customerId} + user:{organizerId}  ✅ SSE-020
