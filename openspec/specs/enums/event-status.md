@@ -14,6 +14,7 @@
 DRAFT     → PUBLISHED   (organizer/admin publish)
 PUBLISHED → ONGOING     (auto: EventScheduler when startAt reached)
 PUBLISHED → CANCELLED   (organizer/admin)
+PUBLISHED → COMPLETED   (auto: EventScheduler when endAt reached — edge case: scheduler was down during the event window, or event published after it ended)
 ONGOING   → COMPLETED   (auto: EventScheduler when endAt reached)
 ONGOING   → CANCELLED   (organizer/admin)
 COMPLETED → PUBLISHED   (auto: when booking cancellation frees capacity — **only applies when COMPLETED was reached via sold-out trigger, not via endAt timeout**)

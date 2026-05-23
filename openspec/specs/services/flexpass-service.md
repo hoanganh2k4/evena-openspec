@@ -91,6 +91,7 @@ Return all 3 per ticket type plus:
 1. Guard: event exists and belongs to currentUser's organization (or caller is ADMIN)
 2. Guard: no overlapping window in `SCHEDULED` or `OPENED` state for this event
 3. Guard: `startAt > now` and `startAt < endAt`
+4. Guard: `endAt < event.startAt` — sale window must close before the event begins
 4. For each ticket type: compute `selectedPrice` using per-ticket-type `pricingMethod` (default `TRIMMED_MEAN`)
 5. Create `FlexPassSaleWindow(status=SCHEDULED)` with per-ticket-type prices stored
 6. Return `SaleWindowResponse` with all `selectedPrice` values so organizer can review before window opens
