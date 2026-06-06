@@ -62,7 +62,7 @@ Showing {start}–{end} of {total}   [← Prev]  Page X / Y  [Next →]
 
 ### Pagination strategy: client-side
 
-Fetches all tickets via `useGetMyTicketsQuery()` once, then slices locally.
+Fetches all tickets via `useGetMyTicketsQuery(undefined, { pollingInterval: 5 * 60 * 1000 })` — polls every 5 minutes to refresh time-window QR tokens.
 
 ### Filter chips
 
@@ -96,9 +96,17 @@ const [ticketFilter, setTicketFilter] = useState<TicketStatus | 'ALL'>('ALL');
 
 ---
 
+## QR code display (ticket modal)
+
+When the user opens a ticket's QR modal:
+- `QRCodeSVG` renders client-side from `qrPayload` returned by the API
+- `qrPayload` is a time-window token (`TW:...`) — rotates every 5 minutes server-side
+- Live data is derived from `ticketsData.data.find(t => t.id === selectedTicket.id)` to ensure polling updates are reflected in the open modal
+
 ## Design rules
 
 - Both tabs share the same `ITEMS_PER_PAGE` constant
 - Infinite scroll is **not allowed** — use explicit pagination controls
 - Filter chip count must reflect the filtered total, not the current page size
 - "All" chip always shows the global total (from the `size=1` count query for orders, from array length for tickets)
+- QR token rotates server-side every 5 minutes; client polling at the same interval ensures the displayed QR is always current

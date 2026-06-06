@@ -201,6 +201,25 @@ eas build --platform all --profile production
 <!-- No location, contacts, or unnecessary permissions -->
 ```
 
+### 5.3b QR Screenshot Protection
+
+| Platform | Mechanism | Effect |
+|---|---|---|
+| Android | `expo-screen-capture.preventScreenCaptureAsync()` | `FLAG_SECURE` — screenshots and app-switcher produce black image |
+| iOS | `enableAppSwitcherProtectionAsync(0.8)` | Blurs content in app-switcher |
+| iOS | `addScreenshotListener` | Alert shown after screenshot taken |
+
+Applied via `ScreenGuard` component wrapping `useScreenshotProtection` hook. Active on all return states of `TicketDetailScreen`.
+
+### 5.3c Force Logout on Session Expiry
+
+When JWT refresh fails (refresh token missing or expired):
+1. `client.ts` interceptor calls `authEvents.emitForceLogout()`
+2. `AuthContext` subscriber clears all tokens + sets `isAuthenticated = false`
+3. `RootNavigator` re-renders → `AuthNavigator` → Login screen
+
+Time-window QR token on screen becomes invalid within 5 minutes regardless.
+
 ### 5.4 iOS `Info.plist` Keys
 ```xml
 <key>NSCameraUsageDescription</key>
